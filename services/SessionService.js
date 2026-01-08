@@ -86,6 +86,20 @@ class SessionService {
     }).select('sessionId device os browser ipAddress createdAt lastActivity').sort({ lastActivity: -1 });
   }
 
+  // SessionService.js - Add this method
+  static async getUserSessionsWithCurrent(userId, currentSessionId) {
+    const sessions = await Session.find({ 
+      userId, 
+    })
+    .select('sessionId device os browser ipAddress createdAt lastActivity')
+    .sort({ lastActivity: -1 });
+
+    return sessions.map(session => ({
+      ...session.toObject(),
+      isCurrent: session.sessionId === currentSessionId
+    }));
+  }
+
   // Verify refresh token
   static async verifyRefreshToken(refreshToken, sessionId) {
     try {

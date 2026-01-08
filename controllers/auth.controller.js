@@ -267,11 +267,28 @@ export const me = async (req, res) => {
 };
 
 /* GET ACTIVE SESSIONS */
+// export const getSessions = async (req, res) => {
+//   try {
+//     const sessions = await SessionService.getUserSessions(req.user._id);
+
+//     res.json({ sessions });
+//   } catch (err) {
+//     console.error('Get sessions error:', err);
+//     res.status(500).json({ message: 'Server error' });
+//   }
+// };
+
 export const getSessions = async (req, res) => {
   try {
-    const sessions = await SessionService.getUserSessions(req.user._id);
+    const sessions = await SessionService.getUserSessionsWithCurrent(
+      req.user._id,
+      req.sessionId // Current session from auth middleware
+    );
 
-    res.json({ sessions });
+    res.json({ 
+      sessions,
+      currentSessionId: req.sessionId // Explicit current session
+    });
   } catch (err) {
     console.error('Get sessions error:', err);
     res.status(500).json({ message: 'Server error' });
