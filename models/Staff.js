@@ -7,14 +7,13 @@ const customerSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-    person: {
-      type: String,
+    joining_date: {
+      type: Date,
       required: true,
-      trim: true,
     },
-    rate: {
+    salary: {
       type: Number,
-      required: true,
+      required: false,
     },
     isActive: {
       type: Boolean,
@@ -26,4 +25,4 @@ const customerSchema = new mongoose.Schema(
   }
 );
 
-export default mongoose.model("Customer", customerSchema);
+export default mongoose.model("Staff", customerSchema);

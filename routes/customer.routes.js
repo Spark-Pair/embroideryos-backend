@@ -1,18 +1,14 @@
-import express from 'express';
-import authMiddleware from '../middlewares/auth.js';
-import subscriptionMiddleware from '../middlewares/subscription.js';
-import roleMiddleware from '../middlewares/role.js';
-import { addCustomer } from '../controllers/customer.controller.js';
+import express from "express";
+import { createCustomer, getCustomers, getCustomersStats, getCustomer, updateCustomer, toggleCustomerStatus, } from "../controllers/customer.controller.js";
 
 const router = express.Router();
 
-// Common middlewares for all customer routes
-router.use(authMiddleware, subscriptionMiddleware);
-
-// GET all customers (admin, staff, customer)
-// router.get('/', roleMiddleware(['admin', 'staff']), getCustomers);
-
-// POST new customer (admin only)
-router.post('/', roleMiddleware(['admin']), addCustomer);
+// CRUD
+router.post("/", createCustomer);             // Add
+router.get("/", getCustomers);              // List (with customer-wise access)
+router.get("/stats", getCustomersStats);              // List (with customer-wise access)
+router.get("/:id", getCustomer);             // Details
+router.put("/:id", updateCustomer);          // Edit
+router.patch("/:id/toggle-status", toggleCustomerStatus); // Activate / Deactivate
 
 export default router;

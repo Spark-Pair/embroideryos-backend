@@ -25,15 +25,17 @@ import subscriptionMiddleware from './middlewares/subscription.js';
 import allowedRoles from './middlewares/role.js';
 
 import authRoutes from './routes/auth.routes.js';
-import customerRoutes from './routes/customer.routes.js';
 import businessRoutes from './routes/business.routes.js';
 import userRoutes from './routes/user.routes.js';
+import customerRoutes from './routes/customer.routes.js';
+import staffRoutes from './routes/staff.routes.js';
 
 app.use('/api/auth', authRoutes); // login, logout, register
 
+app.use('/api/businesses', authMiddleware, businessRoutes);
+app.use('/api/users', authMiddleware, allowedRoles(['developer']), userRoutes);
 app.use('/api/customers', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), customerRoutes);
-app.use('/api/business', authMiddleware, businessRoutes);
-app.use('/api/user', authMiddleware, allowedRoles(['developer']), userRoutes);
+app.use('/api/staffs', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), staffRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
