@@ -4,11 +4,22 @@ import ProductionConfig from "../models/ProductionConfig.js";
 
 export const getProductionConfig = async (req, res) => {
   try {
-    let config = await ProductionConfig.findOne().sort({ createdAt: -1 }).lean();
+    const { date } = req.query; // e.g. "2025-06-15"
 
-    // Auto-create with defaults if none exists
+    const query = date
+      ? { effective_date: { $lte: new Date(date) } }
+      : {};
+
+    const config = await ProductionConfig.findOne(query)
+      .sort({ effective_date: -1 })
+      .lean();
+
     if (!config) {
-      config = await ProductionConfig.create({});
+      // fallback: oldest config (future-dated configs edge case)
+      const fallback = await ProductionConfig.findOne()
+        .sort({ effective_date: 1 })
+        .lean();
+      return res.json({ success: true, data: fallback || {} });
     }
 
     res.json({ success: true, data: config });
@@ -18,7 +29,43 @@ export const getProductionConfig = async (req, res) => {
   }
 };
 
-// ─── UPDATE config (upsert — always single document) ─────────────────────────
+// ─── CREATE config ─────────────────────────
+
+export const createProductionConfig = async (req, res) => {
+  try {
+    const {
+      stitch_rate,
+      applique_rate,
+      on_target_pct,
+      after_target_pct,
+      pcs_per_round,
+      target_amount,
+      off_amount,
+      bonus_rate,
+      effective_date,
+    } = req.body;
+
+    // Create fresh if none exists
+    const config = await ProductionConfig.create({
+      stitch_rate,
+      applique_rate,
+      on_target_pct,
+      after_target_pct,
+      pcs_per_round,
+      target_amount,
+      off_amount,
+      bonus_rate,
+      effective_date,
+    });
+
+    res.status(201).json({ success: true });
+  } catch (err) {
+    console.error("createProductionConfig:", err);
+    res.status(500).json({ message: "Failed to create config" });
+  }
+};
+
+// ─── UPDATE config ─────────────────────────
 
 export const updateProductionConfig = async (req, res) => {
   try {

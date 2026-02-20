@@ -39,7 +39,7 @@ app.use('/api/users', authMiddleware, allowedRoles(['developer']), userRoutes);
 app.use('/api/customers', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), customerRoutes);
 app.use('/api/staffs', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), staffRoutes);
 app.use('/api/staff-records', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), staffRecordRoutes);
-app.use('/api/production-config', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), productionConfigRoutes);
+app.use('/api/production-configs', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), productionConfigRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
