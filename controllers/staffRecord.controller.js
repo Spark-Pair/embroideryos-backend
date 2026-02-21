@@ -191,6 +191,7 @@ async function buildRecordPayload({ staff_id, date, attendance, production, bonu
       on_target_pct:    config.on_target_pct,
       after_target_pct: config.after_target_pct,
       pcs_per_round:    config.pcs_per_round,
+      target_amount:    config.target_amount,
       off_amount:       config.off_amount,
       bonus_rate:       config.bonus_rate,
     },
@@ -266,7 +267,7 @@ export const getStaffRecords = async (req, res) => {
 
     const records = await StaffRecord.find(filter)
       .populate("staff_id", "name joining_date salary")
-      .sort({ date: -1 })
+      .sort({ _id: -1 })
       .skip(skip)
       .limit(parseInt(limit))
       .lean();

@@ -64,6 +64,7 @@ const staffRecordSchema = new mongoose.Schema(
       on_target_pct:    { type: Number },
       after_target_pct: { type: Number },
       pcs_per_round:    { type: Number },
+      target_amount:    { type: Number },
       off_amount:       { type: Number },
       bonus_rate:       { type: Number },
     },
