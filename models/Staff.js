@@ -19,6 +19,7 @@ const customerSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    businessId: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true },
   },
   {
     timestamps: true,

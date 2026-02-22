@@ -4,11 +4,13 @@ import ProductionConfig from "../models/ProductionConfig.js";
 
 export const getProductionConfig = async (req, res) => {
   try {
-    const { date } = req.query; // e.g. "2025-06-15"
+    const { date, businessId } = req.query; // e.g. "2025-06-15"
 
-    const query = date
-      ? { effective_date: { $lte: new Date(date) } }
-      : {};
+    const query = {};
+
+    if (businessId && mongoose.Types.ObjectId.isValid(businessId)) {
+      query.businessId = new mongoose.Types.ObjectId(businessId);
+    }
 
     const config = await ProductionConfig.findOne(query)
       .sort({ effective_date: -1 })
@@ -43,6 +45,7 @@ export const createProductionConfig = async (req, res) => {
       off_amount,
       bonus_rate,
       effective_date,
+      businessId
     } = req.body;
 
     // Create fresh if none exists
@@ -56,6 +59,7 @@ export const createProductionConfig = async (req, res) => {
       off_amount,
       bonus_rate,
       effective_date,
+      businessId
     });
 
     res.status(201).json({ success: true });

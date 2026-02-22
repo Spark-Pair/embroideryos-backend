@@ -3,9 +3,9 @@ import Customer from "../models/Customer.js";
 // CREATE Customer
 export const createCustomer = async (req, res) => {
   try {
-    const { name, person, rate } = req.body;
+    const { name, person, rate, businessId } = req.body;
 
-    const customer = await Customer.create({ name, person, rate });
+    const customer = await Customer.create({ name, person, rate, businessId });
 
     res.status(201).json({ customer });
   } catch (err) {
@@ -17,9 +17,14 @@ export const createCustomer = async (req, res) => {
 // GET all customers with pagination and filters
 export const getCustomers = async (req, res) => {
   try {
-    const { page = 1, limit = 30, name, status } = req.query;
+    const { page = 1, limit = 30, name, status, businessId } = req.query;
     
     const filter = {};
+    
+    // Business ID filter
+    if (businessId && mongoose.Types.ObjectId.isValid(businessId)) {
+      filter.businessId = new mongoose.Types.ObjectId(businessId);
+    }
     
     // Name search filter
     if (name && name.trim()) {

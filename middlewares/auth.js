@@ -63,6 +63,11 @@ export default async (req, res, next) => {
     req.user = user;
     req.business = business;
     req.sessionId = sessionId;
+
+    if (req.body && typeof req.body === 'object') {
+      req.body.businessId = business._id;
+    }
+    
     next();
 
   } catch (err) {

@@ -210,6 +210,7 @@ export const createStaffRecord = async (req, res) => {
       bonus_qty        = 0,
       bonus_rate_override,   // if user manually sets per-bonus rate
       fix_amount,
+      businessId,
     } = req.body;
 
     if (!mongoose.Types.ObjectId.isValid(staff_id)) {
@@ -234,6 +235,7 @@ export const createStaffRecord = async (req, res) => {
     const record = await StaffRecord.create({
       staff_id,
       date: new Date(date),
+      businessId,
       ...payload,
     });
 
@@ -248,9 +250,13 @@ export const createStaffRecord = async (req, res) => {
 
 export const getStaffRecords = async (req, res) => {
   try {
-    const { page = 1, limit = 30, staff_id, attendance, date_from, date_to } = req.query;
+    const { page = 1, limit = 30, staff_id, attendance, date_from, date_to, businessId } = req.query;
 
     const filter = {};
+
+    if (businessId && mongoose.Types.ObjectId.isValid(businessId)) {
+      filter.businessId = new mongoose.Types.ObjectId(businessId);
+    }
 
     if (staff_id && mongoose.Types.ObjectId.isValid(staff_id)) {
       filter.staff_id = new mongoose.Types.ObjectId(staff_id);

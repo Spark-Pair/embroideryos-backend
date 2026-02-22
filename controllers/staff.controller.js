@@ -3,9 +3,9 @@ import Staff from "../models/Staff.js";
 // CREATE Staff
 export const createStaff = async (req, res) => {
   try {
-    const { name, joining_date, salary } = req.body;
+    const { name, joining_date, salary, businessId } = req.body;
 
-    const staff = await Staff.create({ name, joining_date, salary });
+    const staff = await Staff.create({ name, joining_date, salary, businessId });
 
     res.status(201).json({ staff });
   } catch (err) {
@@ -17,9 +17,14 @@ export const createStaff = async (req, res) => {
 // GET all staffs with pagination and filters
 export const getStaffs = async (req, res) => {
   try {
-    const { page = 1, limit = 30, name, status } = req.query;
+    const { page = 1, limit = 30, name, status, businessId } = req.query;
     
     const filter = {};
+    
+    // Business ID filter
+    if (businessId && mongoose.Types.ObjectId.isValid(businessId)) {
+      filter.businessId = new mongoose.Types.ObjectId(businessId);
+    }
     
     // Name search filter
     if (name && name.trim()) {
@@ -53,6 +58,39 @@ export const getStaffs = async (req, res) => {
         totalItems: total,
         itemsPerPage: parseInt(limit)
       }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch staffs" });
+  }
+};
+
+// GET all staff namess with pagination and filters
+export const getStaffNames = async (req, res) => {
+  try {
+    const { status, businessId } = req.query;
+
+    const filter = {};
+    
+    // Business ID filter
+    if (businessId && mongoose.Types.ObjectId.isValid(businessId)) {
+      filter.businessId = new mongoose.Types.ObjectId(businessId);
+    }
+    
+    // Status filter
+    if (status === 'active') {
+      filter.isActive = true;
+    } else if (status === 'inactive') {
+      filter.isActive = false;
+    }
+    
+    // Fetch paginated data
+    const staffs = await Staff.find(filter)
+      .sort({ name: 1 })
+      .select('name joining_date'); // Only select the name and joining_date fields
+    
+    res.json({
+      data: staffs,
     });
   } catch (err) {
     console.error(err);
