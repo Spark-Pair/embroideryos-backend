@@ -1,13 +1,14 @@
 import express from 'express';
-import { 
-  login, 
-  forceLogin, 
-  logout, 
-  logoutAll, 
-  me, 
+import {
+  login,
+  forceLogin,
+  logout,
+  logoutAll,
+  me,
   refreshToken,
   getSessions,
-  revokeSession
+  revokeSession,
+  updateMyShortcuts,
 } from '../controllers/auth.controller.js';
 import authenticate from '../middlewares/auth.js';
 
@@ -19,6 +20,7 @@ router.post('/refresh', refreshToken);
 router.post('/logout', authenticate, logout);
 router.post('/logout-all', authenticate, logoutAll);
 router.get('/me', authenticate, me);
+router.patch('/shortcuts', authenticate, updateMyShortcuts);
 router.get('/sessions', authenticate, getSessions);
 router.delete('/sessions/:sessionId', authenticate, revokeSession);
 

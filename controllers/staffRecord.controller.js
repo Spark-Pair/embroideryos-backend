@@ -43,7 +43,7 @@ function calcRow(row, config) {
 
   const { stitch_rate, applique_rate, on_target_pct, after_target_pct } = config;
 
-  const total_stitch     = d_stitch * rounds;
+  const total_stitch     = row.d_stitch * rounds;
   const stitch_base      = d_stitch * stitch_rate * pcs / 100;
   const applique_base    = applique_rate * applique * pcs / 100;
   const combined         = stitch_base + applique_base;

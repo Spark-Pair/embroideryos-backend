@@ -3,10 +3,12 @@ import Business from '../models/Business.js';
 import SessionService from '../services/SessionService.js';
 import jwt from 'jsonwebtoken';
 
+const ALLOWED_SHORTCUT_ACTIONS = ['page_header_primary_action'];
+
 // Parse user agent for device info
 const parseUserAgent = (userAgent) => {
   const ua = userAgent || '';
-  
+
   let os = 'Unknown';
   if (ua.includes('Windows')) os = 'Windows';
   else if (ua.includes('Mac')) os = 'macOS';
@@ -34,6 +36,23 @@ const createAccessToken = (userId, sessionId) =>
     { expiresIn: process.env.JWT_EXPIRE }
   );
 
+const sanitizeShortcuts = (input) => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return null;
+  }
+
+  const sanitized = {};
+
+  for (const actionId of ALLOWED_SHORTCUT_ACTIONS) {
+    const value = input[actionId];
+    if (typeof value === 'string') {
+      sanitized[actionId] = value.trim();
+    }
+  }
+
+  return sanitized;
+};
+
 /* LOGIN */
 export const login = async (req, res) => {
   try {
@@ -58,13 +77,13 @@ export const login = async (req, res) => {
     // Check for existing active session
     const existingSession = await SessionService.hasActiveSession(user._id);
     if (existingSession) {
-      return res.status(409).json({ 
+      return res.status(409).json({
         message: 'You are already logged in from another device',
         code: 'ALREADY_LOGGED_IN',
         sessionInfo: {
           sessionId: existingSession.sessionId,
-          createdAt: existingSession.createdAt
-        }
+          createdAt: existingSession.createdAt,
+        },
       });
     }
 
@@ -83,7 +102,7 @@ export const login = async (req, res) => {
       businessData = {
         id: business._id,
         name: business.name,
-        isActive: business.isActive
+        isActive: business.isActive,
       };
     }
 
@@ -107,10 +126,10 @@ export const login = async (req, res) => {
         username: user.username,
         role: user.role,
         isActive: user.isActive,
-        ...(businessData && { business: businessData })
-      }
+        shortcuts: Object.fromEntries(user.shortcuts || []),
+        ...(businessData && { business: businessData }),
+      },
     });
-
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ message: 'Server error. Try again.' });
@@ -151,7 +170,7 @@ export const forceLogin = async (req, res) => {
       businessData = {
         id: business._id,
         name: business.name,
-        isActive: business.isActive
+        isActive: business.isActive,
       };
     }
 
@@ -174,10 +193,10 @@ export const forceLogin = async (req, res) => {
         username: user.username,
         role: user.role,
         isActive: user.isActive,
-        ...(businessData && { business: businessData })
-      }
+        shortcuts: Object.fromEntries(user.shortcuts || []),
+        ...(businessData && { business: businessData }),
+      },
     });
-
   } catch (err) {
     console.error('Force login error:', err);
     res.status(500).json({ message: 'Server error' });
@@ -195,9 +214,9 @@ export const refreshToken = async (req, res) => {
 
     const session = await SessionService.verifyRefreshToken(refreshToken, sessionId);
     if (!session) {
-      return res.status(401).json({ 
+      return res.status(401).json({
         message: 'Invalid refresh token',
-        code: 'REFRESH_INVALID'
+        code: 'REFRESH_INVALID',
       });
     }
 
@@ -205,7 +224,6 @@ export const refreshToken = async (req, res) => {
     const accessToken = createAccessToken(session.userId, sessionId);
 
     res.json({ accessToken });
-
   } catch (err) {
     console.error('Refresh token error:', err);
     res.status(500).json({ message: 'Server error' });
@@ -220,7 +238,6 @@ export const logout = async (req, res) => {
     await SessionService.invalidateSession(sessionId);
 
     res.json({ message: 'Logged out successfully' });
-
   } catch (err) {
     console.error('Logout error:', err);
     res.status(500).json({ message: 'Server error' });
@@ -233,7 +250,6 @@ export const logoutAll = async (req, res) => {
     await SessionService.invalidateAllUserSessions(req.user._id);
 
     res.json({ message: 'Logged out from all devices' });
-
   } catch (err) {
     console.error('Logout all error:', err);
     res.status(500).json({ message: 'Server error' });
@@ -249,13 +265,14 @@ export const me = async (req, res) => {
       username: req.user.username,
       role: req.user.role,
       isActive: req.user.isActive,
+      shortcuts: Object.fromEntries(req.user.shortcuts || []),
     };
 
     if (req.business) {
       response.business = {
         id: req.business._id,
         name: req.business.name,
-        isActive: req.business.isActive
+        isActive: req.business.isActive,
       };
     }
 
@@ -263,6 +280,36 @@ export const me = async (req, res) => {
   } catch (err) {
     console.error('Me endpoint error:', err);
     res.status(500).json({ message: 'Server error' });
+  }
+};
+
+/* UPDATE MY SHORTCUTS */
+export const updateMyShortcuts = async (req, res) => {
+  try {
+    const sanitizedShortcuts = sanitizeShortcuts(req.body?.shortcuts);
+
+    if (!sanitizedShortcuts) {
+      return res.status(400).json({ message: 'Invalid shortcuts payload' });
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    user.shortcuts = {
+      ...Object.fromEntries(user.shortcuts || []),
+      ...sanitizedShortcuts,
+    };
+
+    await user.save();
+
+    return res.json({
+      shortcuts: Object.fromEntries(user.shortcuts || []),
+    });
+  } catch (err) {
+    console.error('Update shortcuts error:', err);
+    return res.status(500).json({ message: 'Failed to update shortcuts' });
   }
 };
 
@@ -285,9 +332,9 @@ export const getSessions = async (req, res) => {
       req.sessionId // Current session from auth middleware
     );
 
-    res.json({ 
+    res.json({
       sessions,
-      currentSessionId: req.sessionId // Explicit current session
+      currentSessionId: req.sessionId, // Explicit current session
     });
   } catch (err) {
     console.error('Get sessions error:', err);

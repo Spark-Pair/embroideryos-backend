@@ -1,4 +1,3 @@
-// models/User.js
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
@@ -9,6 +8,11 @@ const userSchema = new mongoose.Schema({
   role: { type: String, enum: ['developer', 'admin', 'staff'], default: 'staff' },
   isActive: { type: Boolean, default: true },
   businessId: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: false },
+  shortcuts: {
+    type: Map,
+    of: String,
+    default: {},
+  },
 }, { timestamps: true });
 
 // Hash password before saving
