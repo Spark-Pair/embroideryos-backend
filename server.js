@@ -31,6 +31,7 @@ import customerRoutes from './routes/customer.routes.js';
 import staffRoutes from './routes/staff.routes.js';
 import staffRecordRoutes from './routes/staffRecord.routes.js';
 import productionConfigRoutes from './routes/productionConfig.routes.js';
+import staffPaymentRoutes from './routes/staffPayment.routes.js';
 
 app.use('/api/auth', authRoutes); // login, logout, register
 
@@ -39,6 +40,7 @@ app.use('/api/users', authMiddleware, allowedRoles(['developer']), userRoutes);
 app.use('/api/customers', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), customerRoutes);
 app.use('/api/staffs', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), staffRoutes);
 app.use('/api/staff-records', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), staffRecordRoutes);
+app.use('/api/staff-payments', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), staffPaymentRoutes);
 app.use('/api/production-configs', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), productionConfigRoutes);
 
 const PORT = process.env.PORT || 5000;

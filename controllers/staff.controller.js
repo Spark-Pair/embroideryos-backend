@@ -1,11 +1,24 @@
+import mongoose from "mongoose";
 import Staff from "../models/Staff.js";
+
+const parseOpeningBalance = (value) => {
+  if (value === undefined || value === null || value === "") return 0;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : 0;
+};
 
 // CREATE Staff
 export const createStaff = async (req, res) => {
   try {
-    const { name, joining_date, salary, businessId } = req.body;
+    const { name, joining_date, salary, opening_balance, businessId } = req.body;
 
-    const staff = await Staff.create({ name, joining_date, salary, businessId });
+    const staff = await Staff.create({
+      name,
+      joining_date,
+      salary,
+      opening_balance: parseOpeningBalance(opening_balance),
+      businessId,
+    });
 
     res.status(201).json({ staff });
   } catch (err) {
@@ -138,13 +151,16 @@ export const getStaff = async (req, res) => {
 // UPDATE staff
 export const updateStaff = async (req, res) => {
   try {
-    const { joining_date, salary } = req.body;
+    const { joining_date, salary, opening_balance } = req.body;
 
     const staff = await Staff.findById(req.params.id);
     if (!staff) return res.status(404).json({ message: "Staff not found" });
 
     staff.joining_date = joining_date ?? staff.joining_date;
     staff.salary = salary ?? staff.salary;
+    if (opening_balance !== undefined) {
+      staff.opening_balance = parseOpeningBalance(opening_balance);
+    }
 
     await staff.save();
     res.json(staff);

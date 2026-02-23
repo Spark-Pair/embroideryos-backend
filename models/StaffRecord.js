@@ -67,6 +67,7 @@ const staffRecordSchema = new mongoose.Schema(
       target_amount:    { type: Number },
       off_amount:       { type: Number },
       bonus_rate:       { type: Number },
+      allowance:        { type: Number },
     },
     businessId: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true },
   },

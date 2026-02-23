@@ -16,6 +16,10 @@ const customerSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
+    opening_balance: {
+      type: Number,
+      default: 0,
+    },
     isActive: {
       type: Boolean,
       default: true,

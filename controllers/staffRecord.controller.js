@@ -194,6 +194,7 @@ async function buildRecordPayload({ staff_id, date, attendance, production, bonu
       target_amount:    config.target_amount,
       off_amount:       config.off_amount,
       bonus_rate:       config.bonus_rate,
+      allowance:        config.allowance,
     },
   };
 }
@@ -272,7 +273,7 @@ export const getStaffRecords = async (req, res) => {
     const total = await StaffRecord.countDocuments(filter);
 
     const records = await StaffRecord.find(filter)
-      .populate("staff_id", "name joining_date salary")
+      .populate("staff_id", "name joining_date salary opening_balance")
       .sort({ _id: -1 })
       .skip(skip)
       .limit(parseInt(limit))
@@ -299,7 +300,7 @@ export const getStaffRecords = async (req, res) => {
 export const getStaffRecord = async (req, res) => {
   try {
     const record = await StaffRecord.findById(req.params.id)
-      .populate("staff_id", "name joining_date salary")
+      .populate("staff_id", "name joining_date salary opening_balance")
       .lean();
 
     if (!record) return res.status(404).json({ message: "Record not found" });
@@ -446,5 +447,45 @@ export const getStaffRecordStats = async (req, res) => {
   } catch (err) {
     console.error("getStaffRecordStats:", err);
     res.status(500).json({ message: "Failed to fetch stats" });
+  }
+};
+
+// ─── AVAILABLE MONTHS ────────────────────────────────────────────────────────
+
+export const getStaffRecordMonths = async (req, res) => {
+  try {
+    const match = {};
+
+    if (req.user?.role !== "developer" && req.user?.businessId) {
+      match.businessId = new mongoose.Types.ObjectId(req.user.businessId);
+    } else if (req.query.businessId && mongoose.Types.ObjectId.isValid(req.query.businessId)) {
+      match.businessId = new mongoose.Types.ObjectId(req.query.businessId);
+    }
+
+    const months = await StaffRecord.aggregate([
+      { $match: match },
+      {
+        $project: {
+          _id: 0,
+          month: {
+            $dateToString: {
+              format: "%Y-%m",
+              date: "$date",
+            },
+          },
+        },
+      },
+      { $group: { _id: "$month" } },
+      { $sort: { _id: -1 } },
+      { $project: { _id: 0, month: "$_id" } },
+    ]);
+
+    return res.json({
+      success: true,
+      data: months.map((m) => m.month),
+    });
+  } catch (err) {
+    console.error("getStaffRecordMonths:", err);
+    return res.status(500).json({ message: "Failed to fetch staff record months" });
   }
 };

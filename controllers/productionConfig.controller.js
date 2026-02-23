@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import ProductionConfig from "../models/ProductionConfig.js";
 
 // ─── GET config ───────────────────────────────────────────────────────────────
@@ -12,13 +13,28 @@ export const getProductionConfig = async (req, res) => {
       query.businessId = new mongoose.Types.ObjectId(businessId);
     }
 
-    const config = await ProductionConfig.findOne(query)
-      .sort({ effective_date: -1 })
-      .lean();
+    let config = null;
+    if (date) {
+      const d = new Date(date);
+      if (!Number.isNaN(d.getTime())) {
+        config = await ProductionConfig.findOne({
+          ...query,
+          effective_date: { $lte: d },
+        })
+          .sort({ effective_date: -1, createdAt: -1 })
+          .lean();
+      }
+    }
 
     if (!config) {
-      // fallback: oldest config (future-dated configs edge case)
-      const fallback = await ProductionConfig.findOne()
+      config = await ProductionConfig.findOne(query)
+        .sort({ effective_date: -1, createdAt: -1 })
+        .lean();
+    }
+
+    if (!config) {
+      // fallback: oldest config in same business scope (future-dated configs edge case)
+      const fallback = await ProductionConfig.findOne(query)
         .sort({ effective_date: 1 })
         .lean();
       return res.json({ success: true, data: fallback || {} });
@@ -44,6 +60,7 @@ export const createProductionConfig = async (req, res) => {
       target_amount,
       off_amount,
       bonus_rate,
+      allowance,
       effective_date,
       businessId
     } = req.body;
@@ -58,6 +75,7 @@ export const createProductionConfig = async (req, res) => {
       target_amount,
       off_amount,
       bonus_rate,
+      allowance: allowance ?? 1500,
       effective_date,
       businessId
     });
@@ -80,6 +98,9 @@ export const updateProductionConfig = async (req, res) => {
       after_target_pct,
       pcs_per_round,
       target_amount,
+      off_amount,
+      bonus_rate,
+      allowance,
       effective_date,
     } = req.body;
 
@@ -92,6 +113,9 @@ export const updateProductionConfig = async (req, res) => {
       if (after_target_pct !== undefined) existing.after_target_pct = after_target_pct;
       if (pcs_per_round    !== undefined) existing.pcs_per_round    = pcs_per_round;
       if (target_amount    !== undefined) existing.target_amount    = target_amount;
+      if (off_amount       !== undefined) existing.off_amount       = off_amount;
+      if (bonus_rate       !== undefined) existing.bonus_rate       = bonus_rate;
+      if (allowance        !== undefined) existing.allowance        = allowance;
       if (effective_date   !== undefined) existing.effective_date   = effective_date ? new Date(effective_date) : null;
 
       await existing.save();
@@ -106,6 +130,9 @@ export const updateProductionConfig = async (req, res) => {
       after_target_pct,
       pcs_per_round,
       target_amount,
+      off_amount,
+      bonus_rate,
+      allowance: allowance ?? 1500,
       effective_date: effective_date ? new Date(effective_date) : null,
     });
 

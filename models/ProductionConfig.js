@@ -10,6 +10,7 @@ const productionConfigSchema = new mongoose.Schema(
     target_amount:    { type: Number, required: false },
     off_amount:       { type: Number, required: false },
     bonus_rate:       { type: Number, required: false },
+    allowance:        { type: Number, required: false, default: 1500 },
     effective_date:   { type: Date, required: true, unique: true },
     businessId: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true },
   },

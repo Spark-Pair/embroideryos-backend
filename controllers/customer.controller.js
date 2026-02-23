@@ -1,11 +1,24 @@
+import mongoose from "mongoose";
 import Customer from "../models/Customer.js";
+
+const parseOpeningBalance = (value) => {
+  if (value === undefined || value === null || value === "") return 0;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : 0;
+};
 
 // CREATE Customer
 export const createCustomer = async (req, res) => {
   try {
-    const { name, person, rate, businessId } = req.body;
+    const { name, person, rate, opening_balance, businessId } = req.body;
 
-    const customer = await Customer.create({ name, person, rate, businessId });
+    const customer = await Customer.create({
+      name,
+      person,
+      rate,
+      opening_balance: parseOpeningBalance(opening_balance),
+      businessId,
+    });
 
     res.status(201).json({ customer });
   } catch (err) {
@@ -105,12 +118,15 @@ export const getCustomer = async (req, res) => {
 // UPDATE customer
 export const updateCustomer = async (req, res) => {
   try {
-    const { rate } = req.body;
+    const { rate, opening_balance } = req.body;
 
     const customer = await Customer.findById(req.params.id);
     if (!customer) return res.status(404).json({ message: "Customer not found" });
 
     customer.rate = rate ?? customer.rate;
+    if (opening_balance !== undefined) {
+      customer.opening_balance = parseOpeningBalance(opening_balance);
+    }
 
     await customer.save();
     res.json(customer);
