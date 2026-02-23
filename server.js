@@ -32,6 +32,7 @@ import staffRoutes from './routes/staff.routes.js';
 import staffRecordRoutes from './routes/staffRecord.routes.js';
 import productionConfigRoutes from './routes/productionConfig.routes.js';
 import staffPaymentRoutes from './routes/staffPayment.routes.js';
+import orderRoutes from './routes/order.routes.js';
 
 app.use('/api/auth', authRoutes); // login, logout, register
 
@@ -42,6 +43,7 @@ app.use('/api/staffs', authMiddleware, subscriptionMiddleware, allowedRoles(['ad
 app.use('/api/staff-records', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), staffRecordRoutes);
 app.use('/api/staff-payments', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), staffPaymentRoutes);
 app.use('/api/production-configs', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), productionConfigRoutes);
+app.use('/api/orders', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), orderRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
