@@ -3,7 +3,10 @@ import Business from '../models/Business.js';
 import SessionService from '../services/SessionService.js';
 import jwt from 'jsonwebtoken';
 
-const ALLOWED_SHORTCUT_ACTIONS = ['page_header_primary_action'];
+const ALLOWED_SHORTCUT_ACTIONS = [
+  'page_header_primary_action',
+  'production_add_row'
+];
 
 // Parse user agent for device info
 const parseUserAgent = (userAgent) => {
