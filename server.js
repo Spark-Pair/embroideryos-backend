@@ -14,7 +14,7 @@ app.use(cors({
   credentials: true,
 }));
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 app.get('/', (req, res) => {
   res.send('EmbroideryOS backend is running');
@@ -33,6 +33,8 @@ import staffRecordRoutes from './routes/staffRecord.routes.js';
 import productionConfigRoutes from './routes/productionConfig.routes.js';
 import staffPaymentRoutes from './routes/staffPayment.routes.js';
 import orderRoutes from './routes/order.routes.js';
+import invoiceRoutes from './routes/invoice.routes.js';
+import customerPaymentRoutes from './routes/customerPayment.routes.js';
 
 app.use('/api/auth', authRoutes); // login, logout, register
 
@@ -44,6 +46,8 @@ app.use('/api/staff-records', authMiddleware, subscriptionMiddleware, allowedRol
 app.use('/api/staff-payments', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), staffPaymentRoutes);
 app.use('/api/production-configs', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), productionConfigRoutes);
 app.use('/api/orders', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), orderRoutes);
+app.use('/api/invoices', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), invoiceRoutes);
+app.use('/api/customer-payments', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), customerPaymentRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

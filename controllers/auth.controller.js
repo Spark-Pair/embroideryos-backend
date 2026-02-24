@@ -106,6 +106,7 @@ export const login = async (req, res) => {
         id: business._id,
         name: business.name,
         isActive: business.isActive,
+        invoice_banner_data: business.invoice_banner_data || "",
       };
     }
 
@@ -174,6 +175,7 @@ export const forceLogin = async (req, res) => {
         id: business._id,
         name: business.name,
         isActive: business.isActive,
+        invoice_banner_data: business.invoice_banner_data || "",
       };
     }
 
@@ -276,6 +278,7 @@ export const me = async (req, res) => {
         id: req.business._id,
         name: req.business.name,
         isActive: req.business.isActive,
+        invoice_banner_data: req.business.invoice_banner_data || "",
       };
     }
 

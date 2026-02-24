@@ -13,6 +13,16 @@ function roundDown(value, digits = 2) {
   return Math.floor(value * factor) / factor;
 }
 
+function toBool(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    if (v === "true") return true;
+    if (v === "false") return false;
+  }
+  return fallback;
+}
+
 function computeDesignStitches(s) {
   s = toNum(s);
   if (s <= 0) return 0;
@@ -24,7 +34,8 @@ function computeDesignStitches(s) {
 
 function computeCalculatedRate(baseRate, ds, apqChr) {
   if (toNum(ds) <= 0) return 0;
-  return roundDown((toNum(baseRate) * toNum(ds)) / 1000 + toNum(apqChr), 2);
+  const raw = (toNum(baseRate) * toNum(ds)) / 1000 + toNum(apqChr);
+  return Math.round(raw * 100) / 100;
 }
 
 function computeStitchRate(rate, ds, apq, apqChr) {
@@ -33,6 +44,14 @@ function computeStitchRate(rate, ds, apq, apqChr) {
   if (d <= 0 || r <= 0) return 0;
   const base = toNum(apq) === 0 ? r : r - toNum(apqChr);
   return roundDown((base / d) * 1000, 2);
+}
+
+function computeDesignStitchFromRate(rate, stitchRate, apqChr) {
+  const r = toNum(rate);
+  const sr = toNum(stitchRate);
+  const ac = toNum(apqChr);
+  if (r <= 0 || sr <= 0) return 0;
+  return roundDown(((r - ac) / sr) * 1000, 2);
 }
 
 function computeQtPcs(qty, unit) {
@@ -71,6 +90,9 @@ async function buildOrderPayload(body) {
     actual_stitches,
     apq,
     apq_chr,
+    reverse_mode,
+    two_side,
+    rate_input,
     rate,
   } = body;
 
@@ -90,9 +112,17 @@ async function buildOrderPayload(body) {
   const resolvedActualStitches = toNum(actual_stitches);
   const resolvedApq = apq === "" || apq == null ? null : Math.max(0, Math.min(30, Math.floor(toNum(apq))));
   const resolvedApqChr = apq_chr === "" || apq_chr == null ? null : Math.max(0, toNum(apq_chr));
-  const resolvedRate = toNum(rate);
-
-  const design_stitches = computeDesignStitches(resolvedActualStitches);
+  const resolvedReverseMode = toBool(reverse_mode, false);
+  const resolvedTwoSide = toBool(two_side, false);
+  const resolvedRateInput = Math.max(0, toNum(rate_input ?? rate));
+  const resolvedRate =
+    !resolvedReverseMode && resolvedTwoSide
+      ? roundDown(resolvedRateInput * 2, 2)
+      : resolvedRateInput;
+  const rateForDesignStitch = resolvedTwoSide ? resolvedRateInput / 2 : resolvedRateInput;
+  const design_stitches = resolvedReverseMode
+    ? computeDesignStitchFromRate(rateForDesignStitch, resolvedCustomerBaseRate, resolvedApqChr)
+    : computeDesignStitches(resolvedActualStitches);
   const qt_pcs = computeQtPcs(resolvedQty, resolvedUnit);
   const calculated_rate = computeCalculatedRate(resolvedCustomerBaseRate, design_stitches, resolvedApqChr);
   const stitch_rate = computeStitchRate(resolvedRate, design_stitches, resolvedApq, resolvedApqChr);
@@ -113,6 +143,9 @@ async function buildOrderPayload(body) {
     design_stitches,
     apq: resolvedApq,
     apq_chr: resolvedApqChr,
+    reverse_mode: resolvedReverseMode,
+    two_side: resolvedTwoSide,
+    rate_input: resolvedRateInput,
     rate: resolvedRate,
     calculated_rate,
     stitch_rate,
@@ -152,7 +185,6 @@ export const getOrders = async (req, res) => {
       machine_no,
       date_from,
       date_to,
-      status,
       businessId,
     } = req.query;
 
@@ -166,8 +198,6 @@ export const getOrders = async (req, res) => {
     if (machine_no && machine_no.trim()) {
       filter.machine_no = { $regex: machine_no.trim(), $options: "i" };
     }
-    if (status === "active") filter.isActive = true;
-    if (status === "inactive") filter.isActive = false;
     if (date_from || date_to) {
       filter.date = {};
       if (date_from) filter.date.$gte = new Date(date_from);
@@ -203,7 +233,7 @@ export const getOrders = async (req, res) => {
 
 export const getOrderStats = async (req, res) => {
   try {
-    const { customer_name, machine_no, date_from, date_to, status, businessId } = req.query;
+    const { customer_name, machine_no, date_from, date_to, businessId } = req.query;
 
     const match = {
       ...getBusinessFilter(req, businessId),
@@ -215,17 +245,14 @@ export const getOrderStats = async (req, res) => {
     if (machine_no && machine_no.trim()) {
       match.machine_no = { $regex: machine_no.trim(), $options: "i" };
     }
-    if (status === "active") match.isActive = true;
-    if (status === "inactive") match.isActive = false;
     if (date_from || date_to) {
       match.date = {};
       if (date_from) match.date.$gte = new Date(date_from);
       if (date_to) match.date.$lte = new Date(date_to);
     }
 
-    const [totalOrders, activeOrders, summary] = await Promise.all([
+    const [totalOrders, summary] = await Promise.all([
       Order.countDocuments(match),
-      Order.countDocuments({ ...match, isActive: true }),
       Order.aggregate([
         { $match: match },
         { $group: { _id: null, total_amount: { $sum: "$total_amount" } } },
@@ -236,7 +263,6 @@ export const getOrderStats = async (req, res) => {
       success: true,
       data: {
         total_orders: totalOrders,
-        active_orders: activeOrders,
         total_amount: summary[0]?.total_amount || 0,
       },
     });
@@ -279,21 +305,5 @@ export const updateOrder = async (req, res) => {
   } catch (err) {
     console.error("updateOrder:", err);
     return res.status(500).json({ message: "Failed to update order" });
-  }
-};
-
-export const toggleOrderStatus = async (req, res) => {
-  try {
-    const scope = getBusinessFilter(req, req.query.businessId);
-    const order = await Order.findOne({ _id: req.params.id, ...scope });
-    if (!order) return res.status(404).json({ message: "Order not found" });
-
-    order.isActive = !order.isActive;
-    await order.save();
-
-    return res.json({ success: true, data: { _id: order._id, isActive: order.isActive } });
-  } catch (err) {
-    console.error("toggleOrderStatus:", err);
-    return res.status(500).json({ message: "Failed to toggle order status" });
   }
 };

@@ -25,12 +25,16 @@ const orderSchema = new mongoose.Schema(
     apq: { type: Number, default: null, min: 0 },
     apq_chr: { type: Number, default: null, min: 0 },
 
+    reverse_mode: { type: Boolean, default: true },
+    two_side: { type: Boolean, default: false },
+    rate_input: { type: Number, default: 0, min: 0 },
+    invoice_id: { type: mongoose.Schema.Types.ObjectId, ref: "Invoice", default: null, index: true },
+    invoiced_at: { type: Date, default: null },
     rate: { type: Number, default: 0, min: 0 },
     calculated_rate: { type: Number, default: 0, min: 0 },
     stitch_rate: { type: Number, default: 0, min: 0 },
     total_amount: { type: Number, default: 0, min: 0 },
 
-    isActive: { type: Boolean, default: true },
     businessId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Business",

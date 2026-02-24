@@ -4,7 +4,6 @@ import {
   getOrder,
   getOrders,
   getOrderStats,
-  toggleOrderStatus,
   updateOrder,
 } from "../controllers/order.controller.js";
 
@@ -15,6 +14,5 @@ router.get("/", getOrders);
 router.get("/:id", getOrder);
 router.post("/", createOrder);
 router.put("/:id", updateOrder);
-router.patch("/:id/toggle-status", toggleOrderStatus);
 
 export default router;

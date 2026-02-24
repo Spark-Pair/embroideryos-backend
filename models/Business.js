@@ -5,6 +5,7 @@ const businessSchema = new mongoose.Schema({
   person: { type: String, required: true },
   price: { type: Number, required: true },
   registration_date: { type: Date, default: Date.now },
+  invoice_banner_data: { type: String, default: "" },
   isActive: { type: Boolean, default: true },
 }, { timestamps: true });
 
