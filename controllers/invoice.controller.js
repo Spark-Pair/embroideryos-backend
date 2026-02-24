@@ -3,6 +3,7 @@ import Invoice from "../models/Invoice.js";
 import Order from "../models/Order.js";
 import Customer from "../models/Customer.js";
 import CustomerPayment from "../models/CustomerPayment.js";
+import cloudinary from "../services/cloudinary.js";
 
 function toNum(val) {
   if (val === "" || val == null) return 0;
@@ -22,6 +23,15 @@ function getBusinessFilter(req, requestedBusinessId) {
   }
 
   return {};
+}
+
+function isValidInvoiceImagePayload(value) {
+  if (!value) return true;
+  if (typeof value !== "string") return false;
+  if (value.startsWith("https://") || value.startsWith("http://")) return true;
+  if (!value.startsWith("data:image/")) return false;
+  if (!value.includes(";base64,")) return false;
+  return value.length <= 8_000_000;
 }
 
 export const getInvoiceOrderGroups = async (req, res) => {
@@ -78,7 +88,7 @@ export const getInvoiceOrderGroups = async (req, res) => {
 
 export const createInvoice = async (req, res) => {
   try {
-    const { customer_id, order_ids, invoice_date, note } = req.body;
+    const { customer_id, order_ids, invoice_date, note, image_data } = req.body;
 
     if (!customer_id || !mongoose.Types.ObjectId.isValid(customer_id)) {
       return res.status(400).json({ message: "Valid customer_id is required" });
@@ -86,6 +96,9 @@ export const createInvoice = async (req, res) => {
 
     if (!Array.isArray(order_ids) || order_ids.length === 0) {
       return res.status(400).json({ message: "At least one order must be selected" });
+    }
+    if (!isValidInvoiceImagePayload(image_data)) {
+      return res.status(400).json({ message: "Invalid invoice image (max ~6MB)" });
     }
 
     const uniqueOrderIds = [...new Set(order_ids.map(String))];
@@ -112,6 +125,17 @@ export const createInvoice = async (req, res) => {
     const customerName = orders[0]?.customer_name || "";
     const customer = await Customer.findById(customer_id).select("person").lean();
     const customerPerson = customer?.person || "";
+    let invoiceImageUrl = "";
+
+    if (typeof image_data === "string" && image_data.startsWith("data:image/")) {
+      const uploaded = await cloudinary.uploader.upload(image_data, {
+        folder: "embroideryos/invoice-images",
+        resource_type: "image",
+      });
+      invoiceImageUrl = uploaded.secure_url || "";
+    } else if (typeof image_data === "string") {
+      invoiceImageUrl = image_data;
+    }
 
     const invoice = await Invoice.create({
       customer_id,
@@ -121,6 +145,7 @@ export const createInvoice = async (req, res) => {
       order_count: uniqueOrderIds.length,
       total_amount: totalAmount,
       invoice_date: invoice_date ? new Date(invoice_date) : new Date(),
+      image_data: invoiceImageUrl,
       note: typeof note === "string" ? note.trim() : "",
       businessId: req.body.businessId,
     });

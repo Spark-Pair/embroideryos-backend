@@ -3,6 +3,7 @@ import Business from "../models/Business.js";
 import User from "../models/User.js";
 import Subscription from "../models/Subscription.js";
 import mongoose from "mongoose";
+import cloudinary from "../services/cloudinary.js";
 
 function resolveBusinessId(req, requestedBusinessId) {
   if (req.user?.role === "developer") {
@@ -14,9 +15,10 @@ function resolveBusinessId(req, requestedBusinessId) {
   return req.business?._id || req.user?.businessId || null;
 }
 
-function isValidBannerData(value) {
+function isValidBannerPayload(value) {
   if (value === "") return true;
   if (typeof value !== "string") return false;
+  if (value.startsWith("https://") || value.startsWith("http://")) return true;
   if (!value.startsWith("data:image/")) return false;
   if (!value.includes(";base64,")) return false;
   return value.length <= 8_000_000;
@@ -191,14 +193,45 @@ export const updateMyInvoiceBanner = async (req, res) => {
     if (!businessId) return res.status(400).json({ message: "Business ID is required" });
 
     const bannerData = req.body?.invoice_banner_data;
-    if (!isValidBannerData(bannerData)) {
+    if (!isValidBannerPayload(bannerData)) {
       return res.status(400).json({ message: "Invalid banner image (max ~6MB)" });
     }
 
     const business = await Business.findById(businessId);
     if (!business) return res.status(404).json({ message: "Business not found" });
 
-    business.invoice_banner_data = bannerData || "";
+    if (!bannerData) {
+      if (business.invoice_banner_public_id) {
+        await cloudinary.uploader.destroy(business.invoice_banner_public_id, {
+          resource_type: "image",
+        });
+      }
+
+      business.invoice_banner_data = "";
+      business.invoice_banner_public_id = "";
+      await business.save();
+
+      return res.json({ invoice_banner_data: "" });
+    }
+
+    if (bannerData.startsWith("data:image/")) {
+      const uploaded = await cloudinary.uploader.upload(bannerData, {
+        folder: "embroideryos/invoice-banners",
+        resource_type: "image",
+      });
+
+      if (business.invoice_banner_public_id) {
+        await cloudinary.uploader.destroy(business.invoice_banner_public_id, {
+          resource_type: "image",
+        });
+      }
+
+      business.invoice_banner_data = uploaded.secure_url || "";
+      business.invoice_banner_public_id = uploaded.public_id || "";
+    } else {
+      business.invoice_banner_data = bannerData;
+    }
+
     await business.save();
 
     return res.json({ invoice_banner_data: business.invoice_banner_data || "" });
