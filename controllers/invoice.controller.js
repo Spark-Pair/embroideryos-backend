@@ -5,6 +5,8 @@ import Customer from "../models/Customer.js";
 import CustomerPayment from "../models/CustomerPayment.js";
 import cloudinary from "../services/cloudinary.js";
 
+const MAX_INVOICE_ORDERS = 7;
+
 function toNum(val) {
   if (val === "" || val == null) return 0;
   const n = Number(val);
@@ -102,6 +104,9 @@ export const createInvoice = async (req, res) => {
     }
 
     const uniqueOrderIds = [...new Set(order_ids.map(String))];
+    if (uniqueOrderIds.length > MAX_INVOICE_ORDERS) {
+      return res.status(400).json({ message: `Maximum ${MAX_INVOICE_ORDERS} orders allowed in one invoice` });
+    }
     const areAllValidOrderIds = uniqueOrderIds.every((id) => mongoose.Types.ObjectId.isValid(id));
     if (!areAllValidOrderIds) {
       return res.status(400).json({ message: "One or more order IDs are invalid" });
