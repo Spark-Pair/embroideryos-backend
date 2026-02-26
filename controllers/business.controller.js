@@ -4,6 +4,7 @@ import User from "../models/User.js";
 import Subscription from "../models/Subscription.js";
 import mongoose from "mongoose";
 import cloudinary from "../services/cloudinary.js";
+import { getPlan, isFeatureEnabled } from "../config/plans.js";
 
 function resolveBusinessId(req, requestedBusinessId) {
   if (req.user?.role === "developer") {
@@ -31,7 +32,15 @@ export const createBusiness = async (req, res) => {
 
     const business = await Business.create({ name, person, price, registration_date });
     const user = await User.create({ name, username, password, role: 'admin', businessId: business._id });
-    const subscription = await Subscription.create({ businessId: business._id });
+    const plan = getPlan("trial");
+    const subscription = await Subscription.create({
+      businessId: business._id,
+      plan: plan.id,
+      status: "trial",
+      active: true,
+      startsAt: new Date(),
+      expiresAt: new Date(Date.now() + plan.durationDays * 24 * 60 * 60 * 1000),
+    });
 
     res.status(201).json({ business, user, subscription });
   } catch (err) {
@@ -191,6 +200,13 @@ export const updateMyInvoiceBanner = async (req, res) => {
   try {
     const businessId = resolveBusinessId(req, req.body?.businessId || req.query.businessId);
     if (!businessId) return res.status(400).json({ message: "Business ID is required" });
+
+    if (req.user?.role !== "developer") {
+      const planId = req.subscription?.plan || "trial";
+      if (!isFeatureEnabled(planId, "invoice_banner")) {
+        return res.status(402).json({ message: "Premium plan required for invoice banner" });
+      }
+    }
 
     const bannerData = req.body?.invoice_banner_data;
     if (!isValidBannerPayload(bannerData)) {
