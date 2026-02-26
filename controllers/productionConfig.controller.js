@@ -1,16 +1,28 @@
 import mongoose from "mongoose";
 import ProductionConfig from "../models/ProductionConfig.js";
 
-// ─── GET config ───────────────────────────────────────────────────────────────
+const resolveBusinessId = (req) => {
+  if (req.user?.role !== "developer") {
+    return req.user?.businessId || null;
+  }
+  return req.query?.businessId || req.body?.businessId || null;
+};
+
+const buildBusinessFilter = (req, allowEmptyForDeveloper = true) => {
+  const businessId = resolveBusinessId(req);
+  if (!businessId) {
+    return allowEmptyForDeveloper && req.user?.role === "developer" ? {} : null;
+  }
+  if (!mongoose.Types.ObjectId.isValid(businessId)) return null;
+  return { businessId: new mongoose.Types.ObjectId(businessId) };
+};
 
 export const getProductionConfig = async (req, res) => {
   try {
-    const { date, businessId } = req.query; // e.g. "2025-06-15"
-
-    const query = {};
-
-    if (businessId && mongoose.Types.ObjectId.isValid(businessId)) {
-      query.businessId = new mongoose.Types.ObjectId(businessId);
+    const { date } = req.query;
+    const query = buildBusinessFilter(req);
+    if (!query) {
+      return res.status(400).json({ message: "Invalid businessId" });
     }
 
     let config = null;
@@ -33,21 +45,18 @@ export const getProductionConfig = async (req, res) => {
     }
 
     if (!config) {
-      // fallback: oldest config in same business scope (future-dated configs edge case)
       const fallback = await ProductionConfig.findOne(query)
         .sort({ effective_date: 1 })
         .lean();
       return res.json({ success: true, data: fallback || {} });
     }
 
-    res.json({ success: true, data: config });
+    return res.json({ success: true, data: config });
   } catch (err) {
     console.error("getProductionConfig:", err);
-    res.status(500).json({ message: "Failed to fetch config" });
+    return res.status(500).json({ message: "Failed to fetch config" });
   }
 };
-
-// ─── CREATE config ─────────────────────────
 
 export const createProductionConfig = async (req, res) => {
   try {
@@ -62,10 +71,13 @@ export const createProductionConfig = async (req, res) => {
       bonus_rate,
       allowance,
       effective_date,
-      businessId
     } = req.body;
 
-    // Create fresh if none exists
+    const businessFilter = buildBusinessFilter(req, false);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Valid businessId is required" });
+    }
+
     const config = await ProductionConfig.create({
       stitch_rate,
       applique_rate,
@@ -77,17 +89,15 @@ export const createProductionConfig = async (req, res) => {
       bonus_rate,
       allowance: allowance ?? 1500,
       effective_date,
-      businessId
+      businessId: businessFilter.businessId,
     });
 
-    res.status(201).json({ success: true });
+    return res.status(201).json({ success: true, data: config });
   } catch (err) {
     console.error("createProductionConfig:", err);
-    res.status(500).json({ message: "Failed to create config" });
+    return res.status(500).json({ message: "Failed to create config" });
   }
 };
-
-// ─── UPDATE config ─────────────────────────
 
 export const updateProductionConfig = async (req, res) => {
   try {
@@ -104,25 +114,29 @@ export const updateProductionConfig = async (req, res) => {
       effective_date,
     } = req.body;
 
-    const existing = await ProductionConfig.findOne().sort({ createdAt: -1 });
+    const businessFilter = buildBusinessFilter(req, false);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Valid businessId is required" });
+    }
+
+    const existing = await ProductionConfig.findOne(businessFilter).sort({ createdAt: -1 });
 
     if (existing) {
-      if (stitch_rate      !== undefined) existing.stitch_rate      = stitch_rate;
-      if (applique_rate    !== undefined) existing.applique_rate    = applique_rate;
-      if (on_target_pct    !== undefined) existing.on_target_pct    = on_target_pct;
+      if (stitch_rate !== undefined) existing.stitch_rate = stitch_rate;
+      if (applique_rate !== undefined) existing.applique_rate = applique_rate;
+      if (on_target_pct !== undefined) existing.on_target_pct = on_target_pct;
       if (after_target_pct !== undefined) existing.after_target_pct = after_target_pct;
-      if (pcs_per_round    !== undefined) existing.pcs_per_round    = pcs_per_round;
-      if (target_amount    !== undefined) existing.target_amount    = target_amount;
-      if (off_amount       !== undefined) existing.off_amount       = off_amount;
-      if (bonus_rate       !== undefined) existing.bonus_rate       = bonus_rate;
-      if (allowance        !== undefined) existing.allowance        = allowance;
-      if (effective_date   !== undefined) existing.effective_date   = effective_date ? new Date(effective_date) : null;
+      if (pcs_per_round !== undefined) existing.pcs_per_round = pcs_per_round;
+      if (target_amount !== undefined) existing.target_amount = target_amount;
+      if (off_amount !== undefined) existing.off_amount = off_amount;
+      if (bonus_rate !== undefined) existing.bonus_rate = bonus_rate;
+      if (allowance !== undefined) existing.allowance = allowance;
+      if (effective_date !== undefined) existing.effective_date = effective_date ? new Date(effective_date) : null;
 
       await existing.save();
       return res.json({ success: true, data: existing });
     }
 
-    // Create fresh if none exists
     const config = await ProductionConfig.create({
       stitch_rate,
       applique_rate,
@@ -134,11 +148,12 @@ export const updateProductionConfig = async (req, res) => {
       bonus_rate,
       allowance: allowance ?? 1500,
       effective_date: effective_date ? new Date(effective_date) : null,
+      businessId: businessFilter.businessId,
     });
 
-    res.status(201).json({ success: true, data: config });
+    return res.status(201).json({ success: true, data: config });
   } catch (err) {
     console.error("updateProductionConfig:", err);
-    res.status(500).json({ message: "Failed to update config" });
+    return res.status(500).json({ message: "Failed to update config" });
   }
 };

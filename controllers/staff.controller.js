@@ -7,17 +7,37 @@ const parseOpeningBalance = (value) => {
   return Number.isFinite(num) ? num : 0;
 };
 
+const resolveBusinessId = (req) => {
+  if (req.user?.role !== "developer") {
+    return req.user?.businessId || null;
+  }
+  return req.query?.businessId || req.body?.businessId || null;
+};
+
+const buildBusinessFilter = (req, allowEmptyForDeveloper = true) => {
+  const businessId = resolveBusinessId(req);
+  if (!businessId) {
+    return allowEmptyForDeveloper && req.user?.role === "developer" ? {} : null;
+  }
+  if (!mongoose.Types.ObjectId.isValid(businessId)) return null;
+  return { businessId: new mongoose.Types.ObjectId(businessId) };
+};
+
 // CREATE Staff
 export const createStaff = async (req, res) => {
   try {
-    const { name, joining_date, salary, opening_balance, businessId } = req.body;
+    const { name, joining_date, salary, opening_balance } = req.body;
+    const businessFilter = buildBusinessFilter(req, false);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Valid businessId is required" });
+    }
 
     const staff = await Staff.create({
       name,
       joining_date,
       salary,
       opening_balance: parseOpeningBalance(opening_balance),
-      businessId,
+      businessId: businessFilter.businessId,
     });
 
     res.status(201).json({ staff });
@@ -30,15 +50,13 @@ export const createStaff = async (req, res) => {
 // GET all staffs with pagination and filters
 export const getStaffs = async (req, res) => {
   try {
-    const { page = 1, limit = 30, name, status, businessId } = req.query;
-    
-    const filter = {};
-    
-    // Business ID filter
-    if (businessId && mongoose.Types.ObjectId.isValid(businessId)) {
-      filter.businessId = new mongoose.Types.ObjectId(businessId);
+    const { page = 1, limit = 30, name, status } = req.query;
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Invalid businessId" });
     }
-    
+    const filter = { ...businessFilter };
+
     // Name search filter
     if (name && name.trim()) {
       filter.name = { $regex: name.trim(), $options: 'i' };
@@ -81,14 +99,13 @@ export const getStaffs = async (req, res) => {
 // GET all staff namess with pagination and filters
 export const getStaffNames = async (req, res) => {
   try {
-    const { status, businessId } = req.query;
-
-    const filter = {};
-    
-    // Business ID filter
-    if (businessId && mongoose.Types.ObjectId.isValid(businessId)) {
-      filter.businessId = new mongoose.Types.ObjectId(businessId);
+    const { status } = req.query;
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Invalid businessId" });
     }
+
+    const filter = { ...businessFilter };
     
     // Status filter
     if (status === 'active') {
@@ -113,10 +130,15 @@ export const getStaffNames = async (req, res) => {
 
 export const getStaffsStats = async (req, res) => {
   try {
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ success: false, message: "Invalid businessId" });
+    }
+
     const [total, active, inactive] = await Promise.all([
-      Staff.countDocuments(),
-      Staff.countDocuments({ isActive: true }),
-      Staff.countDocuments({ isActive: false }),
+      Staff.countDocuments(businessFilter),
+      Staff.countDocuments({ ...businessFilter, isActive: true }),
+      Staff.countDocuments({ ...businessFilter, isActive: false }),
     ]);
 
     res.json({
@@ -138,7 +160,12 @@ export const getStaffsStats = async (req, res) => {
 // GET single staff details
 export const getStaff = async (req, res) => {
   try {
-    const staff = await Staff.findById(req.params.id);
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Invalid businessId" });
+    }
+
+    const staff = await Staff.findOne({ _id: req.params.id, ...businessFilter });
     if (!staff) return res.status(404).json({ message: "Staff not found" });
 
     res.json(staff);
@@ -152,8 +179,12 @@ export const getStaff = async (req, res) => {
 export const updateStaff = async (req, res) => {
   try {
     const { joining_date, salary, opening_balance } = req.body;
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Invalid businessId" });
+    }
 
-    const staff = await Staff.findById(req.params.id);
+    const staff = await Staff.findOne({ _id: req.params.id, ...businessFilter });
     if (!staff) return res.status(404).json({ message: "Staff not found" });
 
     staff.joining_date = joining_date ?? staff.joining_date;
@@ -173,7 +204,12 @@ export const updateStaff = async (req, res) => {
 // TOGGLE Active / Inactive
 export const toggleStaffStatus = async (req, res) => {
   try {
-    const staff = await Staff.findById(req.params.id);
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Invalid businessId" });
+    }
+
+    const staff = await Staff.findOne({ _id: req.params.id, ...businessFilter });
     if (!staff) return res.status(404).json({ message: "Staff not found" });
 
     staff.isActive = !staff.isActive;

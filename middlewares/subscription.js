@@ -1,6 +1,6 @@
 import Subscription from "../models/Subscription.js";
 import Business from "../models/Business.js";
-import { getPlan } from "../config/plans.js";
+import { getPlanById } from "../services/plan.service.js";
 
 export default async (req, res, next) => {
   try {
@@ -27,14 +27,14 @@ export default async (req, res, next) => {
 
     // No subscription found
     if (!subscription) {
-      const plan = getPlan("trial");
+      const plan = await getPlanById("trial");
       subscription = await Subscription.create({
         businessId: req.user.businessId,
-        plan: plan.id,
+        plan: plan?.id || "trial",
         status: "trial",
         active: true,
         startsAt: new Date(),
-        expiresAt: new Date(Date.now() + plan.durationDays * 24 * 60 * 60 * 1000),
+        expiresAt: new Date(Date.now() + Number(plan?.durationDays || 7) * 24 * 60 * 60 * 1000),
       });
     }
 
@@ -55,7 +55,7 @@ export default async (req, res, next) => {
 
     // Attach subscription to request for downstream use
     req.subscription = subscription;
-    req.plan = getPlan(subscription.plan);
+    req.plan = await getPlanById(subscription.plan);
 
     next();
   } catch (error) {

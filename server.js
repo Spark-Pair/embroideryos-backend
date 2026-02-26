@@ -41,6 +41,7 @@ import invoiceRoutes from './routes/invoice.routes.js';
 import customerPaymentRoutes from './routes/customerPayment.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
 import subscriptionRoutes from "./routes/subscription.routes.js";
+import subscriptionPaymentRoutes from "./routes/subscriptionPayment.routes.js";
 
 app.use('/api/auth', authRoutes); // login, logout, register
 
@@ -60,6 +61,7 @@ app.use('/api/invoices', authMiddleware, subscriptionMiddleware, allowedRoles(['
 app.use('/api/customer-payments', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), customerPaymentRoutes);
 app.use('/api/dashboard', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), dashboardRoutes);
 app.use("/api/subscriptions", authMiddleware, subscriptionRoutes);
+app.use("/api/subscription-payments", authMiddleware, subscriptionPaymentRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

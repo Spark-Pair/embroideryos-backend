@@ -79,10 +79,6 @@ export const getUser = async (req, res) => {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    if (req.user.role !== "developer" && user.createdBy.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
     res.json(user);
   } catch (err) {
     console.error(err);
@@ -95,10 +91,6 @@ export const toggleStatus = async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
-
-    if (req.user.role !== "developer" && user.createdBy.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: "Access denied" });
-    }
 
     user.isActive = !user.isActive;
     await user.save();

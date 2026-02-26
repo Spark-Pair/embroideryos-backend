@@ -6,9 +6,10 @@ export const PLAN_DEFS = {
     durationDays: 7,
     features: {
       invoice_banner: false,
+      invoice_image_upload: false,
     },
     limits: {
-      users: 2,
+      users: 1,
     },
   },
   basic: {
@@ -18,9 +19,10 @@ export const PLAN_DEFS = {
     durationDays: 30,
     features: {
       invoice_banner: false,
+      invoice_image_upload: false,
     },
     limits: {
-      users: 5,
+      users: 2,
     },
   },
   pro: {
@@ -29,10 +31,11 @@ export const PLAN_DEFS = {
     price: 5000,
     durationDays: 30,
     features: {
-      invoice_banner: false,
+      invoice_banner: true,
+      invoice_image_upload: false,
     },
     limits: {
-      users: 15,
+      users: 5,
     },
   },
   premium: {
@@ -42,9 +45,10 @@ export const PLAN_DEFS = {
     durationDays: 30,
     features: {
       invoice_banner: true,
+      invoice_image_upload: true,
     },
     limits: {
-      users: 50,
+      users: 5,
     },
   },
 };

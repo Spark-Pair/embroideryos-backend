@@ -4,7 +4,7 @@ import User from "../models/User.js";
 import Subscription from "../models/Subscription.js";
 import mongoose from "mongoose";
 import cloudinary from "../services/cloudinary.js";
-import { getPlan, isFeatureEnabled } from "../config/plans.js";
+import { getPlanById, isFeatureEnabled } from "../services/plan.service.js";
 
 function resolveBusinessId(req, requestedBusinessId) {
   if (req.user?.role === "developer") {
@@ -32,14 +32,14 @@ export const createBusiness = async (req, res) => {
 
     const business = await Business.create({ name, person, price, registration_date });
     const user = await User.create({ name, username, password, role: 'admin', businessId: business._id });
-    const plan = getPlan("trial");
+    const plan = await getPlanById("trial");
     const subscription = await Subscription.create({
       businessId: business._id,
-      plan: plan.id,
+      plan: plan?.id || "trial",
       status: "trial",
       active: true,
       startsAt: new Date(),
-      expiresAt: new Date(Date.now() + plan.durationDays * 24 * 60 * 60 * 1000),
+      expiresAt: new Date(Date.now() + Number(plan?.durationDays || 7) * 24 * 60 * 60 * 1000),
     });
 
     res.status(201).json({ business, user, subscription });
@@ -125,7 +125,7 @@ export const getBusiness = async (req, res) => {
     const business = await Business.findById(req.params.id);
     if (!business) return res.status(404).json({ message: "Business not found" });
 
-    if (req.user.role !== "developer" && business.createdBy.toString() !== req.user._id.toString()) {
+    if (req.user.role !== "developer" && String(req.user.businessId) !== String(business._id)) {
       return res.status(403).json({ message: "Access denied" });
     }
 
@@ -144,7 +144,7 @@ export const updateBusiness = async (req, res) => {
     const business = await Business.findById(req.params.id);
     if (!business) return res.status(404).json({ message: "Business not found" });
 
-    if (req.user.role !== "developer" && business.createdBy.toString() !== req.user._id.toString()) {
+    if (req.user.role !== "developer" && String(req.user.businessId) !== String(business._id)) {
       return res.status(403).json({ message: "Access denied" });
     }
 
@@ -167,7 +167,7 @@ export const toggleBusinessStatus = async (req, res) => {
     const business = await Business.findById(req.params.id);
     if (!business) return res.status(404).json({ message: "Business not found" });
 
-    if (req.user.role !== "developer" && business.createdBy.toString() !== req.user._id.toString()) {
+    if (req.user.role !== "developer" && String(req.user.businessId) !== String(business._id)) {
       return res.status(403).json({ message: "Access denied" });
     }
 
@@ -203,7 +203,7 @@ export const updateMyInvoiceBanner = async (req, res) => {
 
     if (req.user?.role !== "developer") {
       const planId = req.subscription?.plan || "trial";
-      if (!isFeatureEnabled(planId, "invoice_banner")) {
+      if (!(await isFeatureEnabled(planId, "invoice_banner"))) {
         return res.status(402).json({ message: "Premium plan required for invoice banner" });
       }
     }

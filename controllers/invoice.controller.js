@@ -102,6 +102,11 @@ export const createInvoice = async (req, res) => {
     if (!isValidInvoiceImagePayload(image_data)) {
       return res.status(400).json({ message: "Invalid invoice image (max ~6MB)" });
     }
+    const hasInvoiceImage = typeof image_data === "string" && image_data.trim().length > 0;
+    const canUploadInvoiceImage = Boolean(req.plan?.features?.invoice_image_upload);
+    if (hasInvoiceImage && !canUploadInvoiceImage) {
+      return res.status(403).json({ message: "Premium plan required for invoice image upload" });
+    }
 
     const uniqueOrderIds = [...new Set(order_ids.map(String))];
     if (uniqueOrderIds.length > MAX_INVOICE_ORDERS) {
@@ -113,6 +118,7 @@ export const createInvoice = async (req, res) => {
     }
 
     const scope = getBusinessFilter(req, req.query.businessId);
+    const scopedBusinessId = scope.businessId || req.body.businessId;
     const orders = await Order.find({
       ...scope,
       _id: { $in: uniqueOrderIds },
@@ -152,7 +158,7 @@ export const createInvoice = async (req, res) => {
       invoice_date: invoice_date ? new Date(invoice_date) : new Date(),
       image_data: invoiceImageUrl,
       note: typeof note === "string" ? note.trim() : "",
-      businessId: req.body.businessId,
+      businessId: scopedBusinessId,
     });
 
     await Order.updateMany(

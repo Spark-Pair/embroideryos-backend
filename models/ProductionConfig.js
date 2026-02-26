@@ -11,12 +11,13 @@ const productionConfigSchema = new mongoose.Schema(
     off_amount:       { type: Number, required: false },
     bonus_rate:       { type: Number, required: false },
     allowance:        { type: Number, required: false, default: 1500 },
-    effective_date:   { type: Date, required: true, unique: true },
+    effective_date:   { type: Date, required: true },
     businessId: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true },
   },
   { timestamps: true }
 );
 
-productionConfigSchema.index({ effective_date: -1 });
+productionConfigSchema.index({ businessId: 1, effective_date: 1 }, { unique: true });
+productionConfigSchema.index({ businessId: 1, effective_date: -1 });
 
 export default mongoose.model("ProductionConfig", productionConfigSchema);

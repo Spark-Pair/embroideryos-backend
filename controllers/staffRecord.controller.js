@@ -10,20 +10,40 @@ const NO_AMOUNT       = new Set(["Absent", "Close"]);  // 0 for everyone
 const NO_BONUS        = new Set(["Absent", "Off", "Close", "Sunday"]);
 const STITCH_CAP      = 5000;
 
+const resolveBusinessId = (req) => {
+  if (req.user?.role !== "developer") {
+    return req.user?.businessId || null;
+  }
+  return req.query?.businessId || req.body?.businessId || null;
+};
+
+const buildBusinessFilter = (req, allowEmptyForDeveloper = true) => {
+  const businessId = resolveBusinessId(req);
+  if (!businessId) {
+    return allowEmptyForDeveloper && req.user?.role === "developer" ? {} : null;
+  }
+  if (!mongoose.Types.ObjectId.isValid(businessId)) return null;
+  return { businessId: new mongoose.Types.ObjectId(businessId) };
+};
+
 // ─── Get config effective for a given date ────────────────────────────────────
 // Finds the config whose effective_date is <= recordDate.
 // If no effective_date is set on any config, returns the latest one.
 
-async function getConfigForDate(recordDate) {
+async function getConfigForDate(recordDate, businessId) {
   const date = new Date(recordDate);
-
-  // Try to find config with effective_date <= recordDate, pick the closest one
-  const config = await ProductionConfig.findOne({
+  const filter = {
     $or: [
       { effective_date: { $lte: date } },
       { effective_date: null },
     ],
-  })
+  };
+  if (businessId) {
+    filter.businessId = new mongoose.Types.ObjectId(businessId);
+  }
+
+  // Try to find config with effective_date <= recordDate, pick the closest one
+  const config = await ProductionConfig.findOne(filter)
     .sort({ effective_date: -1, createdAt: -1 })
     .lean();
 
@@ -132,7 +152,7 @@ function resolveBaseAmount({ attendance, totals, salary, config }) {
 
 async function buildRecordPayload({ staff_id, date, attendance, production, bonus_qty, bonus_rate_override, fix_amount, config }) {
   // Fetch staff to get salary
-  const staff = await Staff.findById(staff_id).lean();
+  const staff = await Staff.findById(staff_id).select("salary").lean();
   const salary = staff?.salary ?? null;
 
   const hasProduction    = !NO_PRODUCTION.has(attendance);
@@ -211,19 +231,27 @@ export const createStaffRecord = async (req, res) => {
       bonus_qty        = 0,
       bonus_rate_override,   // if user manually sets per-bonus rate
       fix_amount,
-      businessId,
     } = req.body;
+    const businessFilter = buildBusinessFilter(req, false);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Valid businessId is required" });
+    }
 
     if (!mongoose.Types.ObjectId.isValid(staff_id)) {
       return res.status(400).json({ message: "Invalid staff_id" });
     }
 
-    const exists = await StaffRecord.findOne({ staff_id, date: new Date(date) });
+    const staff = await Staff.findOne({ _id: staff_id, ...businessFilter }).select("_id");
+    if (!staff) {
+      return res.status(404).json({ message: "Staff not found" });
+    }
+
+    const exists = await StaffRecord.findOne({ staff_id, date: new Date(date), ...businessFilter });
     if (exists) {
       return res.status(409).json({ message: "Record already exists for this staff on this date" });
     }
 
-    const config = await getConfigForDate(date);
+    const config = await getConfigForDate(date, businessFilter.businessId);
     if (!config) {
       return res.status(400).json({ message: "Production config not found. Please set it up first." });
     }
@@ -236,7 +264,7 @@ export const createStaffRecord = async (req, res) => {
     const record = await StaffRecord.create({
       staff_id,
       date: new Date(date),
-      businessId,
+      businessId: businessFilter.businessId,
       ...payload,
     });
 
@@ -251,13 +279,12 @@ export const createStaffRecord = async (req, res) => {
 
 export const getStaffRecords = async (req, res) => {
   try {
-    const { page = 1, limit = 30, staff_id, attendance, date_from, date_to, businessId } = req.query;
-
-    const filter = {};
-
-    if (businessId && mongoose.Types.ObjectId.isValid(businessId)) {
-      filter.businessId = new mongoose.Types.ObjectId(businessId);
+    const { page = 1, limit = 30, staff_id, attendance, date_from, date_to } = req.query;
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Invalid businessId" });
     }
+    const filter = { ...businessFilter };
 
     if (staff_id && mongoose.Types.ObjectId.isValid(staff_id)) {
       filter.staff_id = new mongoose.Types.ObjectId(staff_id);
@@ -299,7 +326,11 @@ export const getStaffRecords = async (req, res) => {
 
 export const getStaffRecord = async (req, res) => {
   try {
-    const record = await StaffRecord.findById(req.params.id)
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Invalid businessId" });
+    }
+    const record = await StaffRecord.findOne({ _id: req.params.id, ...businessFilter })
       .populate("staff_id", "name joining_date salary opening_balance")
       .lean();
 
@@ -317,12 +348,16 @@ export const getStaffRecord = async (req, res) => {
 export const getStaffLastRecord = async (req, res) => {
   try {
     const { staff_id } = req.params;
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Invalid businessId" });
+    }
 
     if (!mongoose.Types.ObjectId.isValid(staff_id)) {
       return res.status(400).json({ message: "Invalid staff_id" });
     }
 
-    const last = await StaffRecord.findOne({ staff_id })
+    const last = await StaffRecord.findOne({ staff_id, ...businessFilter })
       .sort({ date: -1 })
       .select("date attendance")
       .lean();
@@ -351,12 +386,18 @@ export const updateStaffRecord = async (req, res) => {
       fix_amount,
     } = req.body;
 
-    const record = await StaffRecord.findById(req.params.id);
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Invalid businessId" });
+    }
+
+    const record = await StaffRecord.findOne({ _id: req.params.id, ...businessFilter });
     if (!record) return res.status(404).json({ message: "Record not found" });
 
     // Use config for original record date (historical accuracy)
-    const config = await getConfigForDate(record.date) ||
-                   await ProductionConfig.findOne().sort({ createdAt: -1 }).lean();
+    const config =
+      await getConfigForDate(record.date, record.businessId) ||
+      await ProductionConfig.findOne({ businessId: record.businessId }).sort({ createdAt: -1 }).lean();
 
     const payload = await buildRecordPayload({
       staff_id:   record.staff_id,
@@ -383,7 +424,11 @@ export const updateStaffRecord = async (req, res) => {
 
 export const deleteStaffRecord = async (req, res) => {
   try {
-    const record = await StaffRecord.findByIdAndDelete(req.params.id);
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Invalid businessId" });
+    }
+    const record = await StaffRecord.findOneAndDelete({ _id: req.params.id, ...businessFilter });
     if (!record) return res.status(404).json({ message: "Record not found" });
 
     res.json({ success: true, message: "Record deleted" });
@@ -398,8 +443,12 @@ export const deleteStaffRecord = async (req, res) => {
 export const getStaffRecordStats = async (req, res) => {
   try {
     const { staff_id, date_from, date_to } = req.query;
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Invalid businessId" });
+    }
 
-    const matchStage = {};
+    const matchStage = { ...businessFilter };
     if (staff_id && mongoose.Types.ObjectId.isValid(staff_id)) {
       matchStage.staff_id = new mongoose.Types.ObjectId(staff_id);
     }
@@ -454,12 +503,9 @@ export const getStaffRecordStats = async (req, res) => {
 
 export const getStaffRecordMonths = async (req, res) => {
   try {
-    const match = {};
-
-    if (req.user?.role !== "developer" && req.user?.businessId) {
-      match.businessId = new mongoose.Types.ObjectId(req.user.businessId);
-    } else if (req.query.businessId && mongoose.Types.ObjectId.isValid(req.query.businessId)) {
-      match.businessId = new mongoose.Types.ObjectId(req.query.businessId);
+    const match = buildBusinessFilter(req);
+    if (match === null) {
+      return res.status(400).json({ message: "Invalid businessId" });
     }
 
     const months = await StaffRecord.aggregate([

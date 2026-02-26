@@ -7,17 +7,37 @@ const parseOpeningBalance = (value) => {
   return Number.isFinite(num) ? num : 0;
 };
 
+const resolveBusinessId = (req) => {
+  if (req.user?.role !== "developer") {
+    return req.user?.businessId || null;
+  }
+  return req.query?.businessId || req.body?.businessId || null;
+};
+
+const buildBusinessFilter = (req, allowEmptyForDeveloper = true) => {
+  const businessId = resolveBusinessId(req);
+  if (!businessId) {
+    return allowEmptyForDeveloper && req.user?.role === "developer" ? {} : null;
+  }
+  if (!mongoose.Types.ObjectId.isValid(businessId)) return null;
+  return { businessId: new mongoose.Types.ObjectId(businessId) };
+};
+
 // CREATE Customer
 export const createCustomer = async (req, res) => {
   try {
-    const { name, person, rate, opening_balance, businessId } = req.body;
+    const { name, person, rate, opening_balance } = req.body;
+    const businessFilter = buildBusinessFilter(req, false);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Valid businessId is required" });
+    }
 
     const customer = await Customer.create({
       name,
       person,
       rate,
       opening_balance: parseOpeningBalance(opening_balance),
-      businessId,
+      businessId: businessFilter.businessId,
     });
 
     res.status(201).json({ customer });
@@ -30,15 +50,13 @@ export const createCustomer = async (req, res) => {
 // GET all customers with pagination and filters
 export const getCustomers = async (req, res) => {
   try {
-    const { page = 1, limit = 30, name, status, businessId } = req.query;
-    
-    const filter = {};
-    
-    // Business ID filter
-    if (businessId && mongoose.Types.ObjectId.isValid(businessId)) {
-      filter.businessId = new mongoose.Types.ObjectId(businessId);
+    const { page = 1, limit = 30, name, status } = req.query;
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Invalid businessId" });
     }
-    
+    const filter = { ...businessFilter };
+
     // Name search filter
     if (name && name.trim()) {
       filter.name = { $regex: name.trim(), $options: 'i' };
@@ -80,10 +98,15 @@ export const getCustomers = async (req, res) => {
 
 export const getCustomersStats = async (req, res) => {
   try {
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ success: false, message: "Invalid businessId" });
+    }
+
     const [total, active, inactive] = await Promise.all([
-      Customer.countDocuments(),
-      Customer.countDocuments({ isActive: true }),
-      Customer.countDocuments({ isActive: false }),
+      Customer.countDocuments(businessFilter),
+      Customer.countDocuments({ ...businessFilter, isActive: true }),
+      Customer.countDocuments({ ...businessFilter, isActive: false }),
     ]);
 
     res.json({
@@ -105,7 +128,11 @@ export const getCustomersStats = async (req, res) => {
 // GET single customer details
 export const getCustomer = async (req, res) => {
   try {
-    const customer = await Customer.findById(req.params.id);
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Invalid businessId" });
+    }
+    const customer = await Customer.findOne({ _id: req.params.id, ...businessFilter });
     if (!customer) return res.status(404).json({ message: "Customer not found" });
 
     res.json(customer);
@@ -119,8 +146,12 @@ export const getCustomer = async (req, res) => {
 export const updateCustomer = async (req, res) => {
   try {
     const { rate, opening_balance } = req.body;
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Invalid businessId" });
+    }
 
-    const customer = await Customer.findById(req.params.id);
+    const customer = await Customer.findOne({ _id: req.params.id, ...businessFilter });
     if (!customer) return res.status(404).json({ message: "Customer not found" });
 
     customer.rate = rate ?? customer.rate;
@@ -139,7 +170,11 @@ export const updateCustomer = async (req, res) => {
 // TOGGLE Active / Inactive
 export const toggleCustomerStatus = async (req, res) => {
   try {
-    const customer = await Customer.findById(req.params.id);
+    const businessFilter = buildBusinessFilter(req);
+    if (!businessFilter) {
+      return res.status(400).json({ message: "Invalid businessId" });
+    }
+    const customer = await Customer.findOne({ _id: req.params.id, ...businessFilter });
     if (!customer) return res.status(404).json({ message: "Customer not found" });
 
     customer.isActive = !customer.isActive;
