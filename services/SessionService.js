@@ -90,6 +90,7 @@ class SessionService {
   static async getUserSessionsWithCurrent(userId, currentSessionId) {
     const sessions = await Session.find({ 
       userId, 
+      valid: true
     })
     .select('sessionId device os browser ipAddress createdAt lastActivity')
     .sort({ lastActivity: -1 });

@@ -1,5 +1,7 @@
 import User from '../models/User.js';
 import Business from '../models/Business.js';
+import Session from '../models/Session.js';
+import Subscription from '../models/Subscription.js';
 import SessionService from '../services/SessionService.js';
 import jwt from 'jsonwebtoken';
 
@@ -56,6 +58,8 @@ const sanitizeShortcuts = (input) => {
   return sanitized;
 };
 
+const toShortcutObject = (value) => Object.fromEntries(value || []);
+
 /* LOGIN */
 export const login = async (req, res) => {
   try {
@@ -92,6 +96,7 @@ export const login = async (req, res) => {
 
     // Business validation for non-developers
     let businessData = null;
+    let resolvedShortcuts = toShortcutObject(user.shortcuts);
     if (user.role !== 'developer') {
       if (!user.businessId) {
         return res.status(403).json({ message: 'No business associated' });
@@ -108,6 +113,10 @@ export const login = async (req, res) => {
         isActive: business.isActive,
         invoice_banner_data: business.invoice_banner_data || "",
       };
+      const businessShortcuts = toShortcutObject(business.shortcuts);
+      resolvedShortcuts = Object.keys(businessShortcuts).length > 0
+        ? businessShortcuts
+        : resolvedShortcuts;
     }
 
     // Create session
@@ -130,7 +139,7 @@ export const login = async (req, res) => {
         username: user.username,
         role: user.role,
         isActive: user.isActive,
-        shortcuts: Object.fromEntries(user.shortcuts || []),
+        shortcuts: resolvedShortcuts,
         ...(businessData && { business: businessData }),
       },
     });
@@ -161,6 +170,7 @@ export const forceLogin = async (req, res) => {
 
     // Business validation
     let businessData = null;
+    let resolvedShortcuts = toShortcutObject(user.shortcuts);
     if (user.role !== 'developer') {
       if (!user.businessId) {
         return res.status(403).json({ message: 'No business associated' });
@@ -177,6 +187,10 @@ export const forceLogin = async (req, res) => {
         isActive: business.isActive,
         invoice_banner_data: business.invoice_banner_data || "",
       };
+      const businessShortcuts = toShortcutObject(business.shortcuts);
+      resolvedShortcuts = Object.keys(businessShortcuts).length > 0
+        ? businessShortcuts
+        : resolvedShortcuts;
     }
 
     // Create new session
@@ -198,7 +212,7 @@ export const forceLogin = async (req, res) => {
         username: user.username,
         role: user.role,
         isActive: user.isActive,
-        shortcuts: Object.fromEntries(user.shortcuts || []),
+        shortcuts: resolvedShortcuts,
         ...(businessData && { business: businessData }),
       },
     });
@@ -264,13 +278,20 @@ export const logoutAll = async (req, res) => {
 /* GET CURRENT USER */
 export const me = async (req, res) => {
   try {
+    const userShortcuts = toShortcutObject(req.user.shortcuts);
+    const businessShortcuts = toShortcutObject(req.business?.shortcuts);
+    const resolvedShortcuts =
+      req.user.role === "developer"
+        ? userShortcuts
+        : (Object.keys(businessShortcuts).length > 0 ? businessShortcuts : userShortcuts);
+
     const response = {
       id: req.user._id,
       name: req.user.name,
       username: req.user.username,
       role: req.user.role,
       isActive: req.user.isActive,
-      shortcuts: Object.fromEntries(req.user.shortcuts || []),
+      shortcuts: resolvedShortcuts,
     };
 
     if (req.business) {
@@ -280,6 +301,26 @@ export const me = async (req, res) => {
         isActive: req.business.isActive,
         invoice_banner_data: req.business.invoice_banner_data || "",
       };
+    }
+
+    if (req.user.role !== "developer" && req.user.businessId) {
+      const subscription = await Subscription.findOne({ businessId: req.user.businessId }).lean();
+      if (subscription) {
+        const now = new Date();
+        const expiresAt = subscription.expiresAt ? new Date(subscription.expiresAt) : null;
+        const readOnly = Boolean(expiresAt && expiresAt < now);
+
+        response.subscription = {
+          plan: subscription.plan,
+          status: readOnly ? "expired" : subscription.status,
+          active: readOnly ? false : Boolean(subscription.active),
+          startsAt: subscription.startsAt || null,
+          expiresAt: subscription.expiresAt || null,
+          readOnly,
+        };
+      } else {
+        response.subscription = null;
+      }
     }
 
     res.json(response);
@@ -292,26 +333,42 @@ export const me = async (req, res) => {
 /* UPDATE MY SHORTCUTS */
 export const updateMyShortcuts = async (req, res) => {
   try {
+    if (req.user.role === "developer") {
+      return res.status(403).json({ message: "Developer shortcuts are disabled" });
+    }
+
     const sanitizedShortcuts = sanitizeShortcuts(req.body?.shortcuts);
 
     if (!sanitizedShortcuts) {
       return res.status(400).json({ message: 'Invalid shortcuts payload' });
     }
 
-    const user = await User.findById(req.user._id);
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+    const business = await Business.findById(req.user.businessId);
+    if (!business) {
+      return res.status(404).json({ message: 'Business not found' });
     }
 
-    user.shortcuts = {
-      ...Object.fromEntries(user.shortcuts || []),
+    const subscription = await Subscription.findOne({ businessId: req.user.businessId }).lean();
+    const now = new Date();
+    const isReadOnly = Boolean(subscription?.expiresAt && new Date(subscription.expiresAt) < now);
+    if (isReadOnly) {
+      return res.status(402).json({
+        message: "Subscription expired. Account is in read-only mode.",
+        code: "SUBSCRIPTION_EXPIRED_READ_ONLY",
+        readOnly: true,
+        expiresAt: subscription.expiresAt,
+      });
+    }
+
+    business.shortcuts = {
+      ...toShortcutObject(business.shortcuts),
       ...sanitizedShortcuts,
     };
 
-    await user.save();
+    await business.save();
 
     return res.json({
-      shortcuts: Object.fromEntries(user.shortcuts || []),
+      shortcuts: Object.fromEntries(business.shortcuts || []),
     });
   } catch (err) {
     console.error('Update shortcuts error:', err);
@@ -353,13 +410,28 @@ export const revokeSession = async (req, res) => {
   try {
     const { sessionId } = req.params;
 
-    // Verify session belongs to user
-    const session = await SessionService.validateSession(sessionId);
-    if (!session || session.userId.toString() !== req.user._id.toString()) {
-      return res.status(404).json({ message: 'Session not found' });
+    if (!sessionId) {
+      return res.status(400).json({ message: 'Session ID is required' });
     }
 
-    await SessionService.invalidateSession(sessionId);
+    if (sessionId === req.sessionId) {
+      return res.status(400).json({ message: 'Cannot revoke current session from this action' });
+    }
+
+    const result = await Session.updateOne(
+      {
+        sessionId,
+        userId: req.user._id,
+        valid: true,
+      },
+      {
+        valid: false,
+      }
+    );
+
+    if (!result.modifiedCount) {
+      return res.status(404).json({ message: 'Session not found' });
+    }
 
     res.json({ message: 'Session revoked successfully' });
   } catch (err) {

@@ -38,24 +38,42 @@ export default async (req, res, next) => {
       });
     }
 
-    // Subscription inactive
-    if (!subscription.active || subscription.status === "canceled") {
-      return res.status(402).json({ message: "Subscription inactive" });
+    const now = new Date();
+    const isExpired = Boolean(subscription.expiresAt && new Date(subscription.expiresAt) < now);
+    const isReadMethod = req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS";
+
+    if (isExpired || subscription.status === "expired") {
+      if (subscription.status !== "expired" || subscription.active !== false) {
+        subscription.active = false;
+        subscription.status = "expired";
+        await subscription.save();
+      }
+
+      req.subscription = subscription;
+      req.plan = await getPlanById(subscription.plan);
+      req.readOnlyMode = true;
+
+      if (isReadMethod) {
+        return next();
+      }
+
+      return res.status(402).json({
+        message: "Subscription expired. Account is in read-only mode.",
+        code: "SUBSCRIPTION_EXPIRED_READ_ONLY",
+        readOnly: true,
+        expiresAt: subscription.expiresAt,
+      });
     }
 
-    // Subscription expired
-    if (subscription.expiresAt < new Date()) {
-      // Optional: auto-disable expired subscription
-      subscription.active = false;
-      subscription.status = "expired";
-      await subscription.save();
-      
-      return res.status(402).json({ message: 'Subscription expired' });
+    // Subscription inactive (non-expired states like canceled)
+    if (!subscription.active || subscription.status === "canceled") {
+      return res.status(402).json({ message: "Subscription inactive" });
     }
 
     // Attach subscription to request for downstream use
     req.subscription = subscription;
     req.plan = await getPlanById(subscription.plan);
+    req.readOnlyMode = false;
 
     next();
   } catch (error) {

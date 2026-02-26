@@ -146,6 +146,105 @@ export const createCustomerPayment = async (req, res) => {
   }
 };
 
+export const updateCustomerPayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid payment id" });
+    }
+
+    const {
+      customer_id,
+      date,
+      month,
+      method,
+      reference_no,
+      bank_name,
+      party_name,
+      cheque_date,
+      clear_date,
+      remarks,
+    } = req.body;
+
+    const amount = Number(req.body.amount);
+
+    if (!mongoose.Types.ObjectId.isValid(customer_id)) {
+      return res.status(400).json({ message: "Invalid customer_id" });
+    }
+
+    const normalizedMonth = normalizeMonth(month);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(normalizedMonth)) {
+      return res.status(400).json({ message: "Month must be in YYYY-MM format" });
+    }
+
+    if (!PAYMENT_METHODS.has(method)) {
+      return res.status(400).json({ message: "Invalid payment method" });
+    }
+
+    if (!date || Number.isNaN(new Date(date).getTime())) {
+      return res.status(400).json({ message: "Invalid date" });
+    }
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ message: "Amount must be greater than 0" });
+    }
+
+    const referenceNo = normalizeText(reference_no);
+    const bankName = normalizeText(bank_name);
+    const partyName = normalizeText(party_name);
+
+    const methodError = validateByMethod({
+      method,
+      referenceNo,
+      bankName,
+      partyName,
+      chequeDate: cheque_date,
+      clearDate: clear_date,
+    });
+    if (methodError) {
+      return res.status(400).json({ message: methodError });
+    }
+
+    const businessFilter = buildBusinessFilter(req);
+    const paymentQuery = { _id: id, ...businessFilter };
+    const payment = await CustomerPayment.findOne(paymentQuery);
+    if (!payment) {
+      return res.status(404).json({ message: "Customer payment not found" });
+    }
+
+    const customerQuery = { _id: customer_id, ...businessFilter };
+    const customer = await Customer.findOne(customerQuery).select("_id name").lean();
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    payment.customer_id = customer_id;
+    payment.customer_name = customer.name;
+    payment.date = new Date(date);
+    payment.month = normalizedMonth;
+    payment.method = method;
+    payment.amount = amount;
+    payment.reference_no = referenceNo;
+    payment.bank_name = bankName;
+    payment.party_name = partyName;
+    payment.cheque_date = cheque_date ? new Date(cheque_date) : null;
+    payment.clear_date = clear_date ? new Date(clear_date) : null;
+    payment.remarks = normalizeText(remarks);
+
+    await payment.save();
+
+    const populated = await CustomerPayment.findById(payment._id).populate(
+      "customer_id",
+      "name person opening_balance"
+    );
+
+    return res.json({ success: true, data: populated });
+  } catch (err) {
+    console.error("updateCustomerPayment:", err);
+    return res.status(500).json({ message: "Failed to update customer payment" });
+  }
+};
+
 export const getCustomerPayments = async (req, res) => {
   try {
     const {

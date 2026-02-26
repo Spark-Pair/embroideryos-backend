@@ -7,6 +7,11 @@ const businessSchema = new mongoose.Schema({
   registration_date: { type: Date, default: Date.now },
   invoice_banner_data: { type: String, default: "" },
   invoice_banner_public_id: { type: String, default: "" },
+  shortcuts: {
+    type: Map,
+    of: String,
+    default: {},
+  },
   isActive: { type: Boolean, default: true },
 }, { timestamps: true });
 

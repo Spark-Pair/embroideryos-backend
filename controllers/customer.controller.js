@@ -1,5 +1,7 @@
 import mongoose from "mongoose";
 import Customer from "../models/Customer.js";
+import Invoice from "../models/Invoice.js";
+import CustomerPayment from "../models/CustomerPayment.js";
 
 const parseOpeningBalance = (value) => {
   if (value === undefined || value === null || value === "") return 0;
@@ -21,6 +23,52 @@ const buildBusinessFilter = (req, allowEmptyForDeveloper = true) => {
   }
   if (!mongoose.Types.ObjectId.isValid(businessId)) return null;
   return { businessId: new mongoose.Types.ObjectId(businessId) };
+};
+
+const toId = (value) => String(value);
+
+const attachCustomerCurrentBalance = async (customers, businessFilter = {}) => {
+  if (!Array.isArray(customers) || customers.length === 0) return customers;
+
+  const customerIds = customers
+    .map((c) => c?._id)
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+
+  if (customerIds.length === 0) return customers;
+
+  const invoiceMatch = { customer_id: { $in: customerIds } };
+  const paymentMatch = { customer_id: { $in: customerIds } };
+
+  if (businessFilter?.businessId) {
+    invoiceMatch.businessId = businessFilter.businessId;
+    paymentMatch.businessId = businessFilter.businessId;
+  }
+
+  const [invoiceTotals, paymentTotals] = await Promise.all([
+    Invoice.aggregate([
+      { $match: invoiceMatch },
+      { $group: { _id: "$customer_id", total: { $sum: "$total_amount" } } },
+    ]),
+    CustomerPayment.aggregate([
+      { $match: paymentMatch },
+      { $group: { _id: "$customer_id", total: { $sum: "$amount" } } },
+    ]),
+  ]);
+
+  const invoiceMap = new Map(invoiceTotals.map((row) => [toId(row._id), Number(row.total || 0)]));
+  const paymentMap = new Map(paymentTotals.map((row) => [toId(row._id), Number(row.total || 0)]));
+
+  return customers.map((customer) => {
+    const id = toId(customer._id);
+    const opening = Number(customer.opening_balance || 0);
+    const invoiced = invoiceMap.get(id) || 0;
+    const paid = paymentMap.get(id) || 0;
+    return {
+      ...(typeof customer.toObject === "function" ? customer.toObject() : customer),
+      current_balance: opening + invoiced - paid,
+    };
+  });
 };
 
 // CREATE Customer
@@ -80,9 +128,11 @@ export const getCustomers = async (req, res) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
+
+    const customersWithBalance = await attachCustomerCurrentBalance(customers, businessFilter);
     
     res.json({
-      data: customers,
+      data: customersWithBalance,
       pagination: {
         currentPage: parseInt(page),
         totalPages: Math.ceil(total / parseInt(limit)),
@@ -134,8 +184,9 @@ export const getCustomer = async (req, res) => {
     }
     const customer = await Customer.findOne({ _id: req.params.id, ...businessFilter });
     if (!customer) return res.status(404).json({ message: "Customer not found" });
+    const [customerWithBalance] = await attachCustomerCurrentBalance([customer], businessFilter);
 
-    res.json(customer);
+    res.json(customerWithBalance);
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Failed to fetch customer" });
