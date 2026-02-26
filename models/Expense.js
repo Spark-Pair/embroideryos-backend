@@ -8,7 +8,15 @@ const expenseSchema = new mongoose.Schema(
       default: "cash",
       index: true,
     },
+    fixed_source: {
+      type: String,
+      enum: ["", "cash", "supplier"],
+      default: "",
+      index: true,
+    },
     item_name: { type: String, required: true, trim: true },
+    quantity: { type: Number, default: 0, min: 0 },
+    rate: { type: Number, default: 0, min: 0 },
     amount: { type: Number, required: true, min: 0 },
     date: { type: Date, required: true, index: true },
     month: {

@@ -3,6 +3,7 @@ import Expense from "../models/Expense.js";
 import Supplier from "../models/Supplier.js";
 
 const EXPENSE_TYPES = new Set(["cash", "supplier", "fixed"]);
+const FIXED_SOURCES = new Set(["cash", "supplier"]);
 
 const toNum = (value) => {
   const num = Number(value);
@@ -38,6 +39,7 @@ export const createExpense = async (req, res) => {
   try {
     const {
       expense_type,
+      fixed_source,
       supplier_id,
       date,
       month,
@@ -84,20 +86,23 @@ export const createExpense = async (req, res) => {
       return res.status(400).json({ message: "At least one expense item is required" });
     }
 
-    const normalizedMonth = normalizeMonth(month || String(date || "").slice(0, 7));
+    const fallbackDate = new Date().toISOString().slice(0, 10);
+    const normalizedMonth = normalizeMonth(month || String(date || fallbackDate).slice(0, 7));
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(normalizedMonth)) {
       return res.status(400).json({ message: "Month must be in YYYY-MM format" });
     }
 
-    const parsedDate = parseDate(date, expense_type === "fixed" ? normalizedMonth : null);
+    const parsedDate = parseDate(date || fallbackDate, expense_type === "fixed" ? normalizedMonth : null);
     if (!parsedDate) return res.status(400).json({ message: "Valid date/month is required" });
 
     const normalizedItems = items
       .map((row) => ({
         item_name: normalizeText(row?.item_name),
+        quantity: toNum(row?.quantity),
+        rate: toNum(row?.rate),
         amount: toNum(row?.amount),
       }))
-      .filter((row) => row.item_name && row.amount > 0);
+      .filter((row) => row.item_name && ((row.quantity > 0 && row.rate > 0) || row.amount > 0));
 
     if (normalizedItems.length === 0) {
       return res.status(400).json({ message: "At least one valid expense item is required" });
@@ -110,9 +115,17 @@ export const createExpense = async (req, res) => {
     let supplierName = "";
     let supplierObjectId = null;
 
-    if (expense_type === "supplier") {
+    let fixedSource = "";
+    if (expense_type === "fixed") {
+      if (!FIXED_SOURCES.has(fixed_source)) {
+        return res.status(400).json({ message: "Fixed source must be cash or supplier" });
+      }
+      fixedSource = fixed_source;
+    }
+
+    if (expense_type === "supplier" || (expense_type === "fixed" && fixedSource === "supplier")) {
       if (!supplier_id || !mongoose.Types.ObjectId.isValid(supplier_id)) {
-        return res.status(400).json({ message: "Valid supplier is required for supplier expense" });
+        return res.status(400).json({ message: "Valid supplier is required" });
       }
 
       const supplier = await Supplier.findOne({ _id: supplier_id, ...buildBusinessFilter(req, req.body.businessId) })
@@ -125,19 +138,33 @@ export const createExpense = async (req, res) => {
     }
 
     const groupKey = new mongoose.Types.ObjectId().toString();
-    const docs = normalizedItems.map((row) => ({
-      expense_type,
-      item_name: row.item_name,
-      amount: row.amount,
-      date: parsedDate,
-      month: normalizedMonth,
-      reference_no: normalizeText(reference_no),
-      remarks: normalizeText(remarks),
-      supplier_id: supplierObjectId,
-      supplier_name: supplierName,
-      group_key: groupKey,
-      businessId,
-    }));
+    const docs = normalizedItems.map((row) => {
+      const quantity = toNum(row.quantity);
+      const rate = toNum(row.rate);
+      const rawAmount = toNum(row.amount);
+      const derivedAmount = quantity > 0 && rate > 0 ? quantity * rate : rawAmount;
+
+      return {
+        expense_type,
+        fixed_source: fixedSource,
+        item_name: row.item_name,
+        quantity,
+        rate,
+        amount: derivedAmount > 0 ? derivedAmount : rawAmount,
+        date: parsedDate,
+        month: normalizedMonth,
+        reference_no: normalizeText(reference_no),
+        remarks: normalizeText(remarks),
+        supplier_id: supplierObjectId,
+        supplier_name: supplierName,
+        group_key: groupKey,
+        businessId,
+      };
+    }).filter((row) => row.amount > 0);
+
+    if (docs.length === 0) {
+      return res.status(400).json({ message: "At least one valid expense item is required" });
+    }
 
     const created = await Expense.insertMany(docs);
     return res.status(201).json({ success: true, data: created });
@@ -155,6 +182,7 @@ export const getExpenses = async (req, res) => {
       title,
       item_name,
       expense_type,
+      fixed_source,
       date_from,
       date_to,
       month,
@@ -174,6 +202,9 @@ export const getExpenses = async (req, res) => {
 
     if (expense_type && EXPENSE_TYPES.has(expense_type)) {
       filter.expense_type = expense_type;
+    }
+    if (fixed_source && FIXED_SOURCES.has(fixed_source)) {
+      filter.fixed_source = fixed_source;
     }
 
     if (supplier_name?.trim()) {
@@ -257,7 +288,7 @@ export const getExpenseStats = async (req, res) => {
 
 export const updateExpense = async (req, res) => {
   try {
-    const { item_name, amount, date, reference_no, remarks } = req.body;
+    const { item_name, quantity, rate, amount, date, reference_no, remarks } = req.body;
 
     const expense = await Expense.findById(req.params.id);
     if (!expense) return res.status(404).json({ message: "Expense not found" });
@@ -268,12 +299,27 @@ export const updateExpense = async (req, res) => {
       expense.item_name = val;
     }
 
+    if (quantity !== undefined) {
+      const parsedQuantity = toNum(quantity);
+      if (parsedQuantity < 0) return res.status(400).json({ message: "Quantity must be 0 or greater" });
+      expense.quantity = parsedQuantity;
+    }
+
+    if (rate !== undefined) {
+      const parsedRate = toNum(rate);
+      if (parsedRate < 0) return res.status(400).json({ message: "Rate must be 0 or greater" });
+      expense.rate = parsedRate;
+    }
+
     if (amount !== undefined) {
       const parsedAmount = toNum(amount);
       if (parsedAmount <= 0) {
         return res.status(400).json({ message: "Amount must be greater than 0" });
       }
       expense.amount = parsedAmount;
+    } else if (quantity !== undefined || rate !== undefined) {
+      const derivedAmount = toNum(expense.quantity) * toNum(expense.rate);
+      if (derivedAmount > 0) expense.amount = derivedAmount;
     }
 
     if (date !== undefined) {
