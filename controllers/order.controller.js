@@ -223,7 +223,7 @@ export const getOrders = async (req, res) => {
 
     const total = await Order.countDocuments(filter);
     const data = await Order.find(filter)
-      .sort({ date: -1, createdAt: -1 })
+      .sort({ createdAt: -1, _id: -1 })
       .skip(skip)
       .limit(parsedLimit)
       .lean();
