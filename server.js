@@ -36,6 +36,8 @@ import staffPaymentRoutes from './routes/staffPayment.routes.js';
 import supplierPaymentRoutes from './routes/supplierPayment.routes.js';
 import expenseRoutes from './routes/expense.routes.js';
 import expenseItemRoutes from './routes/expenseItem.routes.js';
+import crpRateConfigRoutes from './routes/crpRateConfig.routes.js';
+import crpStaffRecordRoutes from './routes/crpStaffRecord.routes.js';
 import orderRoutes from './routes/order.routes.js';
 import invoiceRoutes from './routes/invoice.routes.js';
 import customerPaymentRoutes from './routes/customerPayment.routes.js';
@@ -55,6 +57,8 @@ app.use('/api/staff-payments', authMiddleware, subscriptionMiddleware, allowedRo
 app.use('/api/supplier-payments', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), supplierPaymentRoutes);
 app.use('/api/expenses', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), expenseRoutes);
 app.use('/api/expense-items', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), expenseItemRoutes);
+app.use('/api/crp-rate-configs', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), crpRateConfigRoutes);
+app.use('/api/crp-staff-records', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), crpStaffRecordRoutes);
 app.use('/api/production-configs', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), productionConfigRoutes);
 app.use('/api/orders', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), orderRoutes);
 app.use('/api/invoices', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), invoiceRoutes);

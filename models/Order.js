@@ -15,6 +15,7 @@ const orderSchema = new mongoose.Schema(
     date: { type: Date, required: true, index: true },
     machine_no: { type: String, required: true, trim: true },
     lot_no: { type: String, default: "", trim: true },
+    client_ref: { type: String, default: null, trim: true, index: true },
 
     unit: { type: String, enum: ["Dzn", "Pcs"], default: "Dzn" },
     quantity: { type: Number, required: true, min: 0 },
@@ -46,5 +47,6 @@ const orderSchema = new mongoose.Schema(
 );
 
 orderSchema.index({ businessId: 1, date: -1, createdAt: -1 });
+orderSchema.index({ businessId: 1, client_ref: 1 }, { unique: true, sparse: true });
 
 export default mongoose.model("Order", orderSchema);

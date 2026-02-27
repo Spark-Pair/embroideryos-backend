@@ -85,6 +85,7 @@ async function buildOrderPayload(body) {
     date,
     machine_no,
     lot_no,
+    client_ref,
     unit,
     quantity,
     actual_stitches,
@@ -136,6 +137,7 @@ async function buildOrderPayload(body) {
     date: new Date(date),
     machine_no,
     lot_no: lot_no || "",
+    client_ref: client_ref?.trim() || null,
     unit: resolvedUnit,
     quantity: resolvedQty,
     qt_pcs,
@@ -155,13 +157,24 @@ async function buildOrderPayload(body) {
 
 export const createOrder = async (req, res) => {
   try {
-    const { customer_id, date, machine_no } = req.body;
+    const { customer_id, date, machine_no, client_ref } = req.body;
 
     if (!customer_id || !mongoose.Types.ObjectId.isValid(customer_id)) {
       return res.status(400).json({ message: "Valid customer_id is required" });
     }
     if (!date) return res.status(400).json({ message: "Date is required" });
     if (!machine_no) return res.status(400).json({ message: "Machine number is required" });
+
+    const businessFilter = getBusinessFilter(req, req.body.businessId);
+    if (client_ref?.trim()) {
+      const existingByRef = await Order.findOne({
+        ...businessFilter,
+        client_ref: client_ref.trim(),
+      }).lean();
+      if (existingByRef) {
+        return res.status(200).json({ success: true, data: existingByRef, duplicate: true });
+      }
+    }
 
     const payload = await buildOrderPayload(req.body);
     const order = await Order.create({

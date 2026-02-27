@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import Staff from "../models/Staff.js";
 import StaffRecord from "../models/StaffRecord.js";
 import StaffPayment from "../models/StaffPayment.js";
+import CrpStaffRecord from "../models/CrpStaffRecord.js";
 
 const parseOpeningBalance = (value) => {
   if (value === undefined || value === null || value === "") return 0;
@@ -45,10 +46,14 @@ const attachStaffCurrentBalance = async (staffs, businessFilter = {}) => {
     paymentMatch.businessId = businessFilter.businessId;
   }
 
-  const [recordTotals, paymentTotals] = await Promise.all([
+  const [recordTotals, crpRecordTotals, paymentTotals] = await Promise.all([
     StaffRecord.aggregate([
       { $match: recordMatch },
       { $group: { _id: "$staff_id", total: { $sum: "$final_amount" } } },
+    ]),
+    CrpStaffRecord.aggregate([
+      { $match: recordMatch },
+      { $group: { _id: "$staff_id", total: { $sum: "$total_amount" } } },
     ]),
     StaffPayment.aggregate([
       { $match: paymentMatch },
@@ -64,6 +69,7 @@ const attachStaffCurrentBalance = async (staffs, businessFilter = {}) => {
   ]);
 
   const recordMap = new Map(recordTotals.map((row) => [toId(row._id), Number(row.total || 0)]));
+  const crpRecordMap = new Map(crpRecordTotals.map((row) => [toId(row._id), Number(row.total || 0)]));
   const paymentMap = new Map(
     paymentTotals.map((row) => [
       toId(row._id),
@@ -78,7 +84,7 @@ const attachStaffCurrentBalance = async (staffs, businessFilter = {}) => {
   return staffs.map((staff) => {
     const id = toId(staff._id);
     const opening = Number(staff.opening_balance || 0);
-    const earned = recordMap.get(id) || 0;
+    const earned = (recordMap.get(id) || 0) + (crpRecordMap.get(id) || 0);
     const paid = paymentMap.get(id) || { advance: 0, payment: 0, adjustment: 0 };
     return {
       ...(typeof staff.toObject === "function" ? staff.toObject() : staff),
@@ -90,7 +96,7 @@ const attachStaffCurrentBalance = async (staffs, businessFilter = {}) => {
 // CREATE Staff
 export const createStaff = async (req, res) => {
   try {
-    const { name, joining_date, salary, opening_balance } = req.body;
+    const { name, category, joining_date, salary, opening_balance } = req.body;
     const businessFilter = buildBusinessFilter(req, false);
     if (!businessFilter) {
       return res.status(400).json({ message: "Valid businessId is required" });
@@ -98,6 +104,7 @@ export const createStaff = async (req, res) => {
 
     const staff = await Staff.create({
       name,
+      category: category || "Embroidery",
       joining_date,
       salary,
       opening_balance: parseOpeningBalance(opening_balance),
@@ -114,7 +121,7 @@ export const createStaff = async (req, res) => {
 // GET all staffs with pagination and filters
 export const getStaffs = async (req, res) => {
   try {
-    const { page = 1, limit = 30, name, status } = req.query;
+    const { page = 1, limit = 30, name, status, category } = req.query;
     const businessFilter = buildBusinessFilter(req);
     if (!businessFilter) {
       return res.status(400).json({ message: "Invalid businessId" });
@@ -131,6 +138,9 @@ export const getStaffs = async (req, res) => {
       filter.isActive = true;
     } else if (status === 'inactive') {
       filter.isActive = false;
+    }
+    if (category && category.trim()) {
+      filter.category = category.trim();
     }
     
     // Calculate pagination
@@ -165,7 +175,7 @@ export const getStaffs = async (req, res) => {
 // GET all staff namess with pagination and filters
 export const getStaffNames = async (req, res) => {
   try {
-    const { status } = req.query;
+    const { status, category } = req.query;
     const businessFilter = buildBusinessFilter(req);
     if (!businessFilter) {
       return res.status(400).json({ message: "Invalid businessId" });
@@ -179,11 +189,14 @@ export const getStaffNames = async (req, res) => {
     } else if (status === 'inactive') {
       filter.isActive = false;
     }
+    if (category && category.trim()) {
+      filter.category = category.trim();
+    }
     
     // Fetch paginated data
     const staffs = await Staff.find(filter)
       .sort({ name: 1 })
-      .select('name joining_date'); // Only select the name and joining_date fields
+      .select('name category joining_date'); // Only select required fields
     
     res.json({
       data: staffs,
@@ -245,7 +258,7 @@ export const getStaff = async (req, res) => {
 // UPDATE staff
 export const updateStaff = async (req, res) => {
   try {
-    const { joining_date, salary, opening_balance } = req.body;
+    const { category, joining_date, salary, opening_balance } = req.body;
     const businessFilter = buildBusinessFilter(req);
     if (!businessFilter) {
       return res.status(400).json({ message: "Invalid businessId" });
@@ -254,6 +267,7 @@ export const updateStaff = async (req, res) => {
     const staff = await Staff.findOne({ _id: req.params.id, ...businessFilter });
     if (!staff) return res.status(404).json({ message: "Staff not found" });
 
+    staff.category = category ?? staff.category;
     staff.joining_date = joining_date ?? staff.joining_date;
     staff.salary = salary ?? staff.salary;
     if (opening_balance !== undefined) {

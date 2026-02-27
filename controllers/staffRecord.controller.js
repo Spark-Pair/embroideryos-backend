@@ -26,6 +26,15 @@ const buildBusinessFilter = (req, allowEmptyForDeveloper = true) => {
   return { businessId: new mongoose.Types.ObjectId(businessId) };
 };
 
+async function getEmbroideryStaffIds(businessFilter = {}) {
+  const staffFilter = { ...businessFilter, category: { $ne: "Cropping" } };
+  const staff = await Staff.find(staffFilter).select("_id").lean();
+  return staff
+    .map((item) => item?._id)
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+}
+
 // ─── Get config effective for a given date ────────────────────────────────────
 // Finds the config whose effective_date is <= recordDate.
 // If no effective_date is set on any config, returns the latest one.
@@ -152,7 +161,7 @@ function resolveBaseAmount({ attendance, totals, salary, config }) {
 
 async function buildRecordPayload({ staff_id, date, attendance, production, bonus_qty, bonus_rate_override, fix_amount, config }) {
   // Fetch staff to get salary
-  const staff = await Staff.findById(staff_id).select("salary").lean();
+  const staff = await Staff.findById(staff_id).select("salary category").lean();
   const salary = staff?.salary ?? null;
 
   const hasProduction    = !NO_PRODUCTION.has(attendance);
@@ -241,9 +250,12 @@ export const createStaffRecord = async (req, res) => {
       return res.status(400).json({ message: "Invalid staff_id" });
     }
 
-    const staff = await Staff.findOne({ _id: staff_id, ...businessFilter }).select("_id");
+    const staff = await Staff.findOne({ _id: staff_id, ...businessFilter }).select("_id category");
     if (!staff) {
       return res.status(404).json({ message: "Staff not found" });
+    }
+    if (staff.category === "Cropping") {
+      return res.status(400).json({ message: "Cropping staff can only be recorded in CRP Records" });
     }
 
     const exists = await StaffRecord.findOne({ staff_id, date: new Date(date), ...businessFilter });
@@ -286,8 +298,35 @@ export const getStaffRecords = async (req, res) => {
     }
     const filter = { ...businessFilter };
 
+    const embroideryStaffIds = await getEmbroideryStaffIds(businessFilter);
+    if (embroideryStaffIds.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: 1,
+          totalItems: 0,
+          itemsPerPage: parseInt(limit),
+        },
+      });
+    }
+    filter.staff_id = { $in: embroideryStaffIds };
     if (staff_id && mongoose.Types.ObjectId.isValid(staff_id)) {
-      filter.staff_id = new mongoose.Types.ObjectId(staff_id);
+      const requestedStaffId = new mongoose.Types.ObjectId(staff_id);
+      if (!embroideryStaffIds.some((id) => String(id) === String(requestedStaffId))) {
+        return res.json({
+          success: true,
+          data: [],
+          pagination: {
+            currentPage: parseInt(page),
+            totalPages: 1,
+            totalItems: 0,
+            itemsPerPage: parseInt(limit),
+          },
+        });
+      }
+      filter.staff_id = requestedStaffId;
     }
     if (attendance) filter.attendance = attendance;
     if (date_from || date_to) {
@@ -449,8 +488,39 @@ export const getStaffRecordStats = async (req, res) => {
     }
 
     const matchStage = { ...businessFilter };
+    const embroideryStaffIds = await getEmbroideryStaffIds(businessFilter);
+    if (embroideryStaffIds.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          attendance: {},
+          amounts: {
+            total_base_amount: 0,
+            total_bonus_amount: 0,
+            total_final_amount: 0,
+            record_count: 0,
+          },
+        },
+      });
+    }
+    matchStage.staff_id = { $in: embroideryStaffIds };
     if (staff_id && mongoose.Types.ObjectId.isValid(staff_id)) {
-      matchStage.staff_id = new mongoose.Types.ObjectId(staff_id);
+      const requestedStaffId = new mongoose.Types.ObjectId(staff_id);
+      if (!embroideryStaffIds.some((id) => String(id) === String(requestedStaffId))) {
+        return res.json({
+          success: true,
+          data: {
+            attendance: {},
+            amounts: {
+              total_base_amount: 0,
+              total_bonus_amount: 0,
+              total_final_amount: 0,
+              record_count: 0,
+            },
+          },
+        });
+      }
+      matchStage.staff_id = requestedStaffId;
     }
     if (date_from || date_to) {
       matchStage.date = {};
@@ -508,8 +578,13 @@ export const getStaffRecordMonths = async (req, res) => {
       return res.status(400).json({ message: "Invalid businessId" });
     }
 
+    const embroideryStaffIds = await getEmbroideryStaffIds(match);
+    if (embroideryStaffIds.length === 0) {
+      return res.json({ success: true, data: [] });
+    }
+
     const months = await StaffRecord.aggregate([
-      { $match: match },
+      { $match: { ...match, staff_id: { $in: embroideryStaffIds } } },
       {
         $project: {
           _id: 0,

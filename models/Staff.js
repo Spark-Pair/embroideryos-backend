@@ -7,6 +7,12 @@ const customerSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    category: {
+      type: String,
+      enum: ["Embroidery", "Cropping"],
+      default: "Embroidery",
+      index: true,
+    },
     joining_date: {
       type: Date,
       required: true,
