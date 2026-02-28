@@ -1,6 +1,14 @@
 import mongoose from "mongoose";
 import Customer from "../models/Customer.js";
 import Order from "../models/Order.js";
+import ProductionConfig from "../models/ProductionConfig.js";
+
+const DEFAULT_STITCH_FORMULA_RULES = [
+  { up_to: 4237, mode: "fixed", value: 5000 },
+  { up_to: 10000, mode: "percent", value: 18 },
+  { up_to: 50000, mode: "percent", value: 10 },
+  { up_to: null, mode: "percent", value: 5 },
+];
 
 function toNum(val) {
   if (val === "" || val == null) return 0;
@@ -23,13 +31,43 @@ function toBool(value, fallback = false) {
   return fallback;
 }
 
-function computeDesignStitches(s) {
-  s = toNum(s);
+function normalizeFormulaRules(rawRules) {
+  if (!Array.isArray(rawRules) || rawRules.length === 0) return DEFAULT_STITCH_FORMULA_RULES;
+  const clean = rawRules
+    .map((rule = {}) => {
+      const upToRaw = rule?.up_to;
+      const up_to = upToRaw === "" || upToRaw == null ? null : Math.max(0, toNum(upToRaw));
+      const mode = ["fixed", "percent", "identity"].includes(rule?.mode) ? rule.mode : "identity";
+      const value = mode === "identity" ? 0 : Math.max(0, toNum(rule?.value));
+      return { up_to, mode, value };
+    })
+    .sort((a, b) => {
+      const av = a.up_to == null ? Number.POSITIVE_INFINITY : a.up_to;
+      const bv = b.up_to == null ? Number.POSITIVE_INFINITY : b.up_to;
+      return av - bv;
+    });
+  return clean.length ? clean : DEFAULT_STITCH_FORMULA_RULES;
+}
+
+function computeDesignStitchesByConfig(actualStitches, config) {
+  const s = toNum(actualStitches);
   if (s <= 0) return 0;
-  if (s <= 4237) return 5000;
-  if (s <= 10000) return s + (s * 18) / 100;
-  if (s <= 50000) return s + (s * 10) / 100;
-  return s + (s * 5) / 100;
+
+  if (config?.stitch_formula_enabled === false) return s;
+
+  const rules = normalizeFormulaRules(config?.stitch_formula_rules);
+  if (!rules.length) return s;
+
+  for (const rule of rules) {
+    const threshold = rule.up_to == null ? Number.POSITIVE_INFINITY : toNum(rule.up_to);
+    if (s > threshold) continue;
+
+    if (rule.mode === "fixed") return Math.max(0, toNum(rule.value));
+    if (rule.mode === "percent") return s + (s * toNum(rule.value)) / 100;
+    return s;
+  }
+
+  return s;
 }
 
 function computeCalculatedRate(baseRate, ds, apqChr) {
@@ -76,7 +114,30 @@ function getBusinessFilter(req, requestedBusinessId) {
   return {};
 }
 
-async function buildOrderPayload(body) {
+async function getOrderFormulaConfig(date, businessFilter = {}) {
+  const businessId = businessFilter?.businessId;
+  if (!businessId) return null;
+
+  const query = { businessId };
+  let config = null;
+  const d = date ? new Date(date) : null;
+  if (d && !Number.isNaN(d.getTime())) {
+    config = await ProductionConfig.findOne({
+      ...query,
+      effective_date: { $lte: d },
+    })
+      .sort({ effective_date: -1, createdAt: -1 })
+      .lean();
+  }
+  if (!config) {
+    config = await ProductionConfig.findOne(query)
+      .sort({ effective_date: -1, createdAt: -1 })
+      .lean();
+  }
+  return config || null;
+}
+
+async function buildOrderPayload(body, businessFilter = {}) {
   const {
     customer_id,
     customer_name,
@@ -123,7 +184,10 @@ async function buildOrderPayload(body) {
   const rateForDesignStitch = resolvedTwoSide ? resolvedRateInput / 2 : resolvedRateInput;
   const design_stitches = resolvedReverseMode
     ? computeDesignStitchFromRate(rateForDesignStitch, resolvedCustomerBaseRate, resolvedApqChr)
-    : computeDesignStitches(resolvedActualStitches);
+    : computeDesignStitchesByConfig(
+        resolvedActualStitches,
+        await getOrderFormulaConfig(date, businessFilter)
+      );
   const qt_pcs = computeQtPcs(resolvedQty, resolvedUnit);
   const calculated_rate = computeCalculatedRate(resolvedCustomerBaseRate, design_stitches, resolvedApqChr);
   const stitch_rate = computeStitchRate(resolvedRate, design_stitches, resolvedApq, resolvedApqChr);
@@ -176,7 +240,7 @@ export const createOrder = async (req, res) => {
       }
     }
 
-    const payload = await buildOrderPayload(req.body);
+    const payload = await buildOrderPayload(req.body, businessFilter);
     const order = await Order.create({
       ...payload,
       businessId: req.body.businessId,
@@ -309,7 +373,7 @@ export const updateOrder = async (req, res) => {
       customer_id: req.body.customer_id || existing.customer_id,
       date: req.body.date || existing.date,
       machine_no: req.body.machine_no || existing.machine_no,
-    });
+    }, scope);
 
     Object.assign(existing, payload);
     await existing.save();

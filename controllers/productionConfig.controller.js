@@ -1,6 +1,42 @@
 import mongoose from "mongoose";
 import ProductionConfig from "../models/ProductionConfig.js";
 
+const DEFAULT_STITCH_FORMULA_RULES = [
+  { up_to: 4237, mode: "fixed", value: 5000 },
+  { up_to: 10000, mode: "percent", value: 18 },
+  { up_to: 50000, mode: "percent", value: 10 },
+  { up_to: null, mode: "percent", value: 5 },
+];
+
+const toNum = (value) => {
+  if (value === "" || value == null) return 0;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const normalizeFormulaRules = (rawRules) => {
+  if (!Array.isArray(rawRules)) return DEFAULT_STITCH_FORMULA_RULES;
+
+  const clean = rawRules
+    .map((rule = {}) => {
+      const upToRaw = rule?.up_to;
+      const up_to =
+        upToRaw === "" || upToRaw == null ? null : Math.max(0, toNum(upToRaw));
+      const mode = ["fixed", "percent", "identity"].includes(rule?.mode)
+        ? rule.mode
+        : "identity";
+      const value = mode === "identity" ? 0 : Math.max(0, toNum(rule?.value));
+      return { up_to, mode, value };
+    })
+    .sort((a, b) => {
+      const av = a.up_to == null ? Number.POSITIVE_INFINITY : a.up_to;
+      const bv = b.up_to == null ? Number.POSITIVE_INFINITY : b.up_to;
+      return av - bv;
+    });
+
+  return clean.length ? clean : DEFAULT_STITCH_FORMULA_RULES;
+};
+
 const resolveBusinessId = (req) => {
   if (req.user?.role !== "developer") {
     return req.user?.businessId || null;
@@ -70,6 +106,8 @@ export const createProductionConfig = async (req, res) => {
       off_amount,
       bonus_rate,
       allowance,
+      stitch_formula_enabled,
+      stitch_formula_rules,
       effective_date,
     } = req.body;
 
@@ -88,6 +126,8 @@ export const createProductionConfig = async (req, res) => {
       off_amount,
       bonus_rate,
       allowance: allowance ?? 1500,
+      stitch_formula_enabled: stitch_formula_enabled !== undefined ? Boolean(stitch_formula_enabled) : true,
+      stitch_formula_rules: normalizeFormulaRules(stitch_formula_rules),
       effective_date,
       businessId: businessFilter.businessId,
     });
@@ -111,6 +151,8 @@ export const updateProductionConfig = async (req, res) => {
       off_amount,
       bonus_rate,
       allowance,
+      stitch_formula_enabled,
+      stitch_formula_rules,
       effective_date,
     } = req.body;
 
@@ -131,6 +173,8 @@ export const updateProductionConfig = async (req, res) => {
       if (off_amount !== undefined) existing.off_amount = off_amount;
       if (bonus_rate !== undefined) existing.bonus_rate = bonus_rate;
       if (allowance !== undefined) existing.allowance = allowance;
+      if (stitch_formula_enabled !== undefined) existing.stitch_formula_enabled = Boolean(stitch_formula_enabled);
+      if (stitch_formula_rules !== undefined) existing.stitch_formula_rules = normalizeFormulaRules(stitch_formula_rules);
       if (effective_date !== undefined) existing.effective_date = effective_date ? new Date(effective_date) : null;
 
       await existing.save();
@@ -147,6 +191,8 @@ export const updateProductionConfig = async (req, res) => {
       off_amount,
       bonus_rate,
       allowance: allowance ?? 1500,
+      stitch_formula_enabled: stitch_formula_enabled !== undefined ? Boolean(stitch_formula_enabled) : true,
+      stitch_formula_rules: normalizeFormulaRules(stitch_formula_rules),
       effective_date: effective_date ? new Date(effective_date) : null,
       businessId: businessFilter.businessId,
     });
