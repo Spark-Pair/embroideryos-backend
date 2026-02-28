@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 
 const invoiceSchema = new mongoose.Schema(
   {
+    invoice_number: { type: String, default: "", trim: true },
     customer_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Customer",
@@ -33,5 +34,6 @@ const invoiceSchema = new mongoose.Schema(
 );
 
 invoiceSchema.index({ businessId: 1, invoice_date: -1, createdAt: -1 });
+invoiceSchema.index({ businessId: 1, invoice_number: 1 }, { unique: true, sparse: true });
 
 export default mongoose.model("Invoice", invoiceSchema);

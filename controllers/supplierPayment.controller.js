@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import Supplier from "../models/Supplier.js";
 import SupplierPayment from "../models/SupplierPayment.js";
+import Expense from "../models/Expense.js";
 
 const PAYMENT_METHODS = new Set(["cash", "cheque", "online"]);
 
@@ -192,5 +193,136 @@ export const getSupplierPaymentMonths = async (req, res) => {
   } catch (err) {
     console.error("getSupplierPaymentMonths:", err);
     return res.status(500).json({ message: "Failed to fetch supplier payment months" });
+  }
+};
+
+export const getSupplierStatement = async (req, res) => {
+  try {
+    const { supplier_id, date_from, date_to } = req.query;
+
+    if (!supplier_id || !mongoose.Types.ObjectId.isValid(supplier_id)) {
+      return res.status(400).json({ message: "Valid supplier_id is required" });
+    }
+    if (!date_from || Number.isNaN(new Date(date_from).getTime())) {
+      return res.status(400).json({ message: "Valid date_from is required" });
+    }
+    if (!date_to || Number.isNaN(new Date(date_to).getTime())) {
+      return res.status(400).json({ message: "Valid date_to is required" });
+    }
+
+    const startDate = new Date(date_from);
+    startDate.setHours(0, 0, 0, 0);
+    const endDate = new Date(date_to);
+    endDate.setHours(23, 59, 59, 999);
+    if (endDate < startDate) {
+      return res.status(400).json({ message: "date_to must be greater than or equal to date_from" });
+    }
+
+    const businessFilter = buildBusinessFilter(req);
+    const supplierObjectId = new mongoose.Types.ObjectId(supplier_id);
+    const supplier = await Supplier.findOne({ _id: supplierObjectId, ...businessFilter })
+      .select("_id name opening_balance")
+      .lean();
+    if (!supplier) return res.status(404).json({ message: "Supplier not found" });
+
+    const supplierExpenseFilter = {
+      ...businessFilter,
+      supplier_id: supplierObjectId,
+      $or: [
+        { expense_type: "supplier" },
+        { expense_type: "fixed", fixed_source: "supplier" },
+      ],
+    };
+
+    const [priorExpensesAgg, priorPaymentsAgg, expenses, payments] = await Promise.all([
+      Expense.aggregate([
+        { $match: { ...supplierExpenseFilter, date: { $lt: startDate } } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]),
+      SupplierPayment.aggregate([
+        { $match: { ...businessFilter, supplier_id: supplierObjectId, date: { $lt: startDate } } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]),
+      Expense.find({ ...supplierExpenseFilter, date: { $gte: startDate, $lte: endDate } })
+        .sort({ date: 1, createdAt: 1, _id: 1 })
+        .select("_id date item_name amount reference_no remarks expense_type fixed_source createdAt")
+        .lean(),
+      SupplierPayment.find({ ...businessFilter, supplier_id: supplierObjectId, date: { $gte: startDate, $lte: endDate } })
+        .sort({ date: 1, createdAt: 1, _id: 1 })
+        .select("_id date method amount reference_no remarks createdAt")
+        .lean(),
+    ]);
+
+    const openingBalance =
+      Number(supplier?.opening_balance || 0) +
+      Number(priorExpensesAgg?.[0]?.total || 0) -
+      Number(priorPaymentsAgg?.[0]?.total || 0);
+
+    const rows = [
+      ...expenses.map((row) => ({
+        kind: "expense",
+        _id: row._id,
+        date: row.date,
+        details: row.remarks || row.item_name || "",
+        reference_no: row.reference_no || "",
+        debit: Number(row.amount || 0),
+        credit: 0,
+        expense_type: row.expense_type || "",
+        fixed_source: row.fixed_source || "",
+        item_name: row.item_name || "",
+        createdAt: row.createdAt,
+      })),
+      ...payments.map((row) => ({
+        kind: "payment",
+        _id: row._id,
+        date: row.date,
+        details: row.remarks || "",
+        reference_no: row.reference_no || "",
+        method: row.method || "",
+        debit: 0,
+        credit: Number(row.amount || 0),
+        createdAt: row.createdAt,
+      })),
+    ].sort((a, b) => {
+      const ad = new Date(a.date).getTime();
+      const bd = new Date(b.date).getTime();
+      if (ad !== bd) return ad - bd;
+      const ac = new Date(a.createdAt).getTime();
+      const bc = new Date(b.createdAt).getTime();
+      if (ac !== bc) return ac - bc;
+      return String(a._id).localeCompare(String(b._id));
+    });
+
+    let running = openingBalance;
+    const statementRows = rows.map((row) => {
+      running += Number(row.debit || 0);
+      running -= Number(row.credit || 0);
+      return { ...row, balance: running };
+    });
+
+    const totalExpenses = statementRows.reduce((sum, row) => sum + Number(row.debit || 0), 0);
+    const totalPayments = statementRows.reduce((sum, row) => sum + Number(row.credit || 0), 0);
+    const closingBalance = openingBalance + totalExpenses - totalPayments;
+
+    return res.json({
+      success: true,
+      data: {
+        supplier: {
+          _id: supplier._id,
+          name: supplier.name || "",
+        },
+        date_from: date_from,
+        date_to: date_to,
+        opening_balance: openingBalance,
+        total_expenses: totalExpenses,
+        total_payments: totalPayments,
+        net_change: totalExpenses - totalPayments,
+        closing_balance: closingBalance,
+        rows: statementRows,
+      },
+    });
+  } catch (err) {
+    console.error("getSupplierStatement:", err);
+    return res.status(500).json({ message: "Failed to generate supplier statement" });
   }
 };

@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import CustomerPayment from "../models/CustomerPayment.js";
 import Customer from "../models/Customer.js";
+import Invoice from "../models/Invoice.js";
 
 const PAYMENT_METHODS = new Set(["cash", "cheque", "slip", "online", "adjustment"]);
 
@@ -399,5 +400,154 @@ export const getCustomerPaymentMonths = async (req, res) => {
   } catch (err) {
     console.error("getCustomerPaymentMonths:", err);
     return res.status(500).json({ message: "Failed to fetch customer payment months" });
+  }
+};
+
+export const getCustomerStatement = async (req, res) => {
+  try {
+    const { customer_id, date_from, date_to } = req.query;
+
+    if (!customer_id || !mongoose.Types.ObjectId.isValid(customer_id)) {
+      return res.status(400).json({ message: "Valid customer_id is required" });
+    }
+    if (!date_from || Number.isNaN(new Date(date_from).getTime())) {
+      return res.status(400).json({ message: "Valid date_from is required" });
+    }
+    if (!date_to || Number.isNaN(new Date(date_to).getTime())) {
+      return res.status(400).json({ message: "Valid date_to is required" });
+    }
+
+    const startDate = new Date(date_from);
+    startDate.setHours(0, 0, 0, 0);
+    const endDate = new Date(date_to);
+    endDate.setHours(23, 59, 59, 999);
+
+    if (endDate < startDate) {
+      return res.status(400).json({ message: "date_to must be greater than or equal to date_from" });
+    }
+
+    const businessFilter = buildBusinessFilter(req);
+    const customerObjectId = new mongoose.Types.ObjectId(customer_id);
+    const customer = await Customer.findOne({ _id: customerObjectId, ...businessFilter })
+      .select("_id name person opening_balance")
+      .lean();
+
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    const [priorInvoiceAgg, priorPaymentAgg, invoices, payments] = await Promise.all([
+      Invoice.aggregate([
+        {
+          $match: {
+            ...businessFilter,
+            customer_id: customerObjectId,
+            invoice_date: { $lt: startDate },
+          },
+        },
+        { $group: { _id: null, total: { $sum: "$total_amount" } } },
+      ]),
+      CustomerPayment.aggregate([
+        {
+          $match: {
+            ...businessFilter,
+            customer_id: customerObjectId,
+            date: { $lt: startDate },
+          },
+        },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]),
+      Invoice.find({
+        ...businessFilter,
+        customer_id: customerObjectId,
+        invoice_date: { $gte: startDate, $lte: endDate },
+      })
+        .sort({ invoice_date: 1, createdAt: 1, _id: 1 })
+        .select("_id invoice_number invoice_date total_amount note order_count createdAt")
+        .lean(),
+      CustomerPayment.find({
+        ...businessFilter,
+        customer_id: customerObjectId,
+        date: { $gte: startDate, $lte: endDate },
+      })
+        .sort({ date: 1, createdAt: 1, _id: 1 })
+        .select("_id date method amount reference_no bank_name party_name remarks createdAt")
+        .lean(),
+    ]);
+
+    const openingBalance =
+      Number(customer?.opening_balance || 0) +
+      Number(priorInvoiceAgg?.[0]?.total || 0) -
+      Number(priorPaymentAgg?.[0]?.total || 0);
+
+    const rows = [
+      ...invoices.map((inv) => ({
+        kind: "invoice",
+        _id: inv._id,
+        date: inv.invoice_date,
+        invoice_number: inv.invoice_number || "",
+        details: inv.note || "",
+        debit: Number(inv.total_amount || 0),
+        credit: 0,
+        createdAt: inv.createdAt,
+      })),
+      ...payments.map((p) => ({
+        kind: "payment",
+        _id: p._id,
+        date: p.date,
+        method: p.method,
+        reference_no: p.reference_no || "",
+        bank_name: p.bank_name || "",
+        party_name: p.party_name || "",
+        details: p.remarks || "",
+        debit: 0,
+        credit: Number(p.amount || 0),
+        createdAt: p.createdAt,
+      })),
+    ].sort((a, b) => {
+      const ad = new Date(a.date).getTime();
+      const bd = new Date(b.date).getTime();
+      if (ad !== bd) return ad - bd;
+      const ac = new Date(a.createdAt).getTime();
+      const bc = new Date(b.createdAt).getTime();
+      if (ac !== bc) return ac - bc;
+      return String(a._id).localeCompare(String(b._id));
+    });
+
+    let running = openingBalance;
+    const statementRows = rows.map((row) => {
+      running += Number(row.debit || 0);
+      running -= Number(row.credit || 0);
+      return {
+        ...row,
+        balance: running,
+      };
+    });
+
+    const totalInvoices = statementRows.reduce((sum, row) => sum + Number(row.debit || 0), 0);
+    const totalPayments = statementRows.reduce((sum, row) => sum + Number(row.credit || 0), 0);
+    const closingBalance = openingBalance + totalInvoices - totalPayments;
+
+    return res.json({
+      success: true,
+      data: {
+        customer: {
+          _id: customer._id,
+          name: customer.name || "",
+          person: customer.person || "",
+        },
+        date_from: date_from,
+        date_to: date_to,
+        opening_balance: openingBalance,
+        total_invoices: totalInvoices,
+        total_payments: totalPayments,
+        net_change: totalInvoices - totalPayments,
+        closing_balance: closingBalance,
+        rows: statementRows,
+      },
+    });
+  } catch (err) {
+    console.error("getCustomerStatement:", err);
+    return res.status(500).json({ message: "Failed to generate customer statement" });
   }
 };

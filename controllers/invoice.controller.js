@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import Invoice from "../models/Invoice.js";
+import InvoiceCounter from "../models/InvoiceCounter.js";
 import Order from "../models/Order.js";
 import Customer from "../models/Customer.js";
 import CustomerPayment from "../models/CustomerPayment.js";
@@ -119,6 +120,10 @@ export const createInvoice = async (req, res) => {
 
     const scope = getBusinessFilter(req, req.query.businessId);
     const scopedBusinessId = scope.businessId || req.body.businessId;
+    if (!scopedBusinessId || !mongoose.Types.ObjectId.isValid(scopedBusinessId)) {
+      return res.status(400).json({ message: "Valid businessId is required" });
+    }
+    const businessObjectId = new mongoose.Types.ObjectId(scopedBusinessId);
     const orders = await Order.find({
       ...scope,
       _id: { $in: uniqueOrderIds },
@@ -136,6 +141,17 @@ export const createInvoice = async (req, res) => {
     const customerName = orders[0]?.customer_name || "";
     const customer = await Customer.findById(customer_id).select("person").lean();
     const customerPerson = customer?.person || "";
+    const invoiceDateValue = invoice_date ? new Date(invoice_date) : new Date();
+    const invoiceYear = invoiceDateValue.getFullYear();
+    const counter = await InvoiceCounter.findOneAndUpdate(
+      { businessId: businessObjectId, year: invoiceYear },
+      {
+        $setOnInsert: { businessId: businessObjectId, year: invoiceYear },
+        $inc: { seq: 1 },
+      },
+      { new: true, upsert: true }
+    );
+    const invoiceNumber = `${invoiceYear}-${String(counter.seq).padStart(4, "0")}`;
     let invoiceImageUrl = "";
 
     if (typeof image_data === "string" && image_data.startsWith("data:image/")) {
@@ -149,16 +165,17 @@ export const createInvoice = async (req, res) => {
     }
 
     const invoice = await Invoice.create({
+      invoice_number: invoiceNumber,
       customer_id,
       customer_name: customerName,
       customer_person: customerPerson,
       order_ids: uniqueOrderIds,
       order_count: uniqueOrderIds.length,
       total_amount: totalAmount,
-      invoice_date: invoice_date ? new Date(invoice_date) : new Date(),
+      invoice_date: invoiceDateValue,
       image_data: invoiceImageUrl,
       note: typeof note === "string" ? note.trim() : "",
-      businessId: scopedBusinessId,
+      businessId: businessObjectId,
     });
 
     await Order.updateMany(
