@@ -5,6 +5,8 @@ import Expense from "../models/Expense.js";
 import CustomerPayment from "../models/CustomerPayment.js";
 import SupplierPayment from "../models/SupplierPayment.js";
 import StaffPayment from "../models/StaffPayment.js";
+import StaffRecord from "../models/StaffRecord.js";
+import CrpStaffRecord from "../models/CrpStaffRecord.js";
 import Customer from "../models/Customer.js";
 import Supplier from "../models/Supplier.js";
 import Staff from "../models/Staff.js";
@@ -205,6 +207,8 @@ export const getDashboardSummary = async (req, res) => {
       monthPaymentIn,
       monthSupplierOut,
       monthStaffOut,
+      monthStaffRecords,
+      monthCrpRecords,
 
       activeCustomers,
       activeSuppliers,
@@ -234,6 +238,8 @@ export const getDashboardSummary = async (req, res) => {
       aggregateCountAndAmount(CustomerPayment, "date", "amount", businessMatch, selectedRange.from, selectedRange.to),
       aggregateCountAndAmount(SupplierPayment, "date", "amount", businessMatch, selectedRange.from, selectedRange.to),
       aggregateCountAndAmount(StaffPayment, "date", "amount", businessMatch, selectedRange.from, selectedRange.to),
+      aggregateCountAndAmount(StaffRecord, "date", "final_amount", businessMatch, selectedRange.from, selectedRange.to),
+      aggregateCountAndAmount(CrpStaffRecord, "order_date", "total_amount", businessMatch, selectedRange.from, selectedRange.to),
 
       Customer.countDocuments({ ...businessMatch, isActive: true }),
       Supplier.countDocuments({ ...businessMatch, isActive: true }),
@@ -284,10 +290,14 @@ export const getDashboardSummary = async (req, res) => {
           orders: monthOrders,
           invoices: monthInvoices,
           expenses: monthExpenses,
+          staff_records: monthStaffRecords,
+          crp_records: monthCrpRecords,
           payment_in: monthPaymentIn,
           payment_out: {
             count: monthSupplierOut.count + monthStaffOut.count,
             amount: monthSupplierOut.amount + monthStaffOut.amount,
+            supplier: monthSupplierOut,
+            staff: monthStaffOut,
           },
         },
 
