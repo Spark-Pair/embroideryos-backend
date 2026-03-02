@@ -12,6 +12,7 @@ import Supplier from "../models/Supplier.js";
 import Staff from "../models/Staff.js";
 
 const MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
+const DEFAULT_ALLOWANCE = 1500;
 
 const toYmd = (date) => {
   const d = new Date(date);
@@ -41,6 +42,15 @@ const previousMonth = (monthStr) => {
   const [year, month] = monthStr.split("-").map(Number);
   const d = new Date(year, month - 2, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+};
+
+const getMonthKeyFromDate = (dateInput) => {
+  if (!dateInput) return "";
+  const d = new Date(dateInput);
+  if (Number.isNaN(d.getTime())) return "";
+  const year = d.getUTCFullYear();
+  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
 };
 
 const sanitizeMonth = (raw) => {
@@ -138,6 +148,239 @@ const parseDateInput = (value) => {
   return d;
 };
 
+const isAllowanceEligible = ({ recordCount, absentCount, halfCount }) =>
+  recordCount >= 26 && absentCount === 0 && halfCount <= 1;
+
+const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, selectedRange }) => {
+  const prevMonthKey = previousMonth(selectedMonth);
+  const prevMonthEnd = monthRange(prevMonthKey).to;
+
+  const staffs = await Staff.find({
+    ...businessMatch,
+    category: "Embroidery",
+  })
+    .select("_id name opening_balance isActive")
+    .lean();
+
+  if (!staffs.length) {
+    return {
+      staff_count: 0,
+      active_staff_count: 0,
+      staff_with_records: 0,
+      record_count: 0,
+      work_amount: 0,
+      arrears_amount: 0,
+      allowance_amount: 0,
+      bonus_qty: 0,
+      bonus_amount: 0,
+      deduction_amount: 0,
+      deduction_advance_amount: 0,
+      deduction_payment_amount: 0,
+      deduction_adjustment_amount: 0,
+      balance_amount: 0,
+      by_staff: [],
+    };
+  }
+
+  const staffIds = staffs.map((staff) => staff._id);
+
+  const [records, payments] = await Promise.all([
+    StaffRecord.find({
+      ...businessMatch,
+      staff_id: { $in: staffIds },
+      date: { $lte: selectedRange.to },
+    })
+      .select("staff_id date attendance final_amount bonus_qty bonus_amount config_snapshot.allowance")
+      .lean(),
+    StaffPayment.find({
+      ...businessMatch,
+      staff_id: { $in: staffIds },
+      date: { $lte: selectedRange.to },
+    })
+      .select("staff_id date month type amount")
+      .lean(),
+  ]);
+
+  const summaryByStaff = new Map(
+    staffs.map((staff) => [
+      String(staff._id),
+      {
+        staff_id: String(staff?._id || ""),
+        staff_name: staff?.name || "",
+        is_active: Boolean(staff?.isActive),
+        arrears: Number(staff?.opening_balance || 0),
+        currentRecordCount: 0,
+        currentFinal: 0,
+        currentBonusQty: 0,
+        currentBonusAmt: 0,
+        currentAbsent: 0,
+        currentHalf: 0,
+        currentAllowanceCandidate: null,
+        currentAllowance: 0,
+        currentDeduction: 0,
+        currentAdvance: 0,
+        currentPayment: 0,
+        currentAdjustment: 0,
+      },
+    ])
+  );
+
+  const historyMonthStats = new Map();
+
+  records.forEach((rec) => {
+    const staffId = String(rec?.staff_id || "");
+    if (!summaryByStaff.has(staffId)) return;
+
+    const monthKey = getMonthKeyFromDate(rec?.date);
+    if (!monthKey) return;
+
+    if (monthKey < selectedMonth) {
+      const historyKey = `${staffId}::${monthKey}`;
+      const prev = historyMonthStats.get(historyKey) || {
+        staffId,
+        monthKey,
+        recordCount: 0,
+        absentCount: 0,
+        halfCount: 0,
+        finalAmount: 0,
+        allowanceCandidate: null,
+      };
+      prev.recordCount += 1;
+      if (rec?.attendance === "Absent") prev.absentCount += 1;
+      if (rec?.attendance === "Half") prev.halfCount += 1;
+      prev.finalAmount += Number(rec?.final_amount || 0);
+      const allowance = Number(rec?.config_snapshot?.allowance);
+      if (Number.isFinite(allowance) && allowance >= 0) {
+        prev.allowanceCandidate = allowance;
+      }
+      historyMonthStats.set(historyKey, prev);
+      return;
+    }
+
+    if (monthKey !== selectedMonth) return;
+
+    const current = summaryByStaff.get(staffId);
+    current.currentRecordCount += 1;
+    current.currentFinal += Number(rec?.final_amount || 0);
+    current.currentBonusQty += Number(rec?.bonus_qty || 0);
+    current.currentBonusAmt += Number(rec?.bonus_amount || 0);
+    if (rec?.attendance === "Absent") current.currentAbsent += 1;
+    if (rec?.attendance === "Half") current.currentHalf += 1;
+    const allowance = Number(rec?.config_snapshot?.allowance);
+    if (Number.isFinite(allowance) && allowance >= 0) {
+      current.currentAllowanceCandidate = allowance;
+    }
+  });
+
+  const sortedHistory = [...historyMonthStats.values()].sort((a, b) =>
+    a.monthKey === b.monthKey ? a.staffId.localeCompare(b.staffId) : a.monthKey.localeCompare(b.monthKey)
+  );
+
+  sortedHistory.forEach((row) => {
+    const current = summaryByStaff.get(row.staffId);
+    if (!current) return;
+    current.arrears += Number(row.finalAmount || 0);
+    if (isAllowanceEligible(row)) {
+      current.arrears += Number(row.allowanceCandidate ?? DEFAULT_ALLOWANCE);
+    }
+  });
+
+  payments.forEach((payment) => {
+    const staffId = String(payment?.staff_id || "");
+    const current = summaryByStaff.get(staffId);
+    if (!current) return;
+
+    const amount = Number(payment?.amount || 0);
+    const paymentMonth = typeof payment?.month === "string" && payment.month
+      ? payment.month
+      : getMonthKeyFromDate(payment?.date);
+    const paymentDate = payment?.date ? new Date(payment.date) : null;
+
+    const isHistoryPayment = paymentMonth
+      ? paymentMonth <= prevMonthKey
+      : Boolean(paymentDate && paymentDate <= prevMonthEnd);
+
+    if (isHistoryPayment) {
+      current.arrears -= amount;
+      return;
+    }
+
+    if (paymentMonth !== selectedMonth) return;
+
+    current.currentDeduction += amount;
+    if (payment?.type === "advance") current.currentAdvance += amount;
+    if (payment?.type === "payment") current.currentPayment += amount;
+    if (payment?.type === "adjustment") current.currentAdjustment += amount;
+  });
+
+  let staffWithRecords = 0;
+  const total = {
+    staff_count: staffs.length,
+    active_staff_count: staffs.filter((s) => Boolean(s?.isActive)).length,
+    staff_with_records: 0,
+    record_count: 0,
+    work_amount: 0,
+    arrears_amount: 0,
+    allowance_amount: 0,
+    bonus_qty: 0,
+    bonus_amount: 0,
+    deduction_amount: 0,
+    deduction_advance_amount: 0,
+    deduction_payment_amount: 0,
+    deduction_adjustment_amount: 0,
+    balance_amount: 0,
+    by_staff: [],
+  };
+
+  summaryByStaff.forEach((row) => {
+    if (row.currentRecordCount > 0) {
+      staffWithRecords += 1;
+    }
+    row.currentAllowance = isAllowanceEligible({
+      recordCount: row.currentRecordCount,
+      absentCount: row.currentAbsent,
+      halfCount: row.currentHalf,
+    })
+      ? Number(row.currentAllowanceCandidate ?? DEFAULT_ALLOWANCE)
+      : 0;
+
+    const workAmount = row.currentFinal - row.currentBonusAmt;
+
+    total.record_count += row.currentRecordCount;
+    total.work_amount += workAmount;
+    total.arrears_amount += row.arrears;
+    total.allowance_amount += row.currentAllowance;
+    total.bonus_qty += row.currentBonusQty;
+    total.bonus_amount += row.currentBonusAmt;
+    total.deduction_amount += row.currentDeduction;
+    total.deduction_advance_amount += row.currentAdvance;
+    total.deduction_payment_amount += row.currentPayment;
+    total.deduction_adjustment_amount += row.currentAdjustment;
+    const balance = row.arrears + row.currentFinal + row.currentAllowance - row.currentDeduction;
+    total.balance_amount += balance;
+    total.by_staff.push({
+      staff_id: row.staff_id,
+      staff_name: row.staff_name,
+      is_active: row.is_active,
+      records: row.currentRecordCount,
+      work_amount: workAmount,
+      arrears_amount: row.arrears,
+      allowance_amount: row.currentAllowance,
+      bonus_qty: row.currentBonusQty,
+      bonus_amount: row.currentBonusAmt,
+      deduction_amount: row.currentDeduction,
+      deduction_advance_amount: row.currentAdvance,
+      deduction_payment_amount: row.currentPayment,
+      deduction_adjustment_amount: row.currentAdjustment,
+      balance_amount: balance,
+    });
+  });
+
+  total.staff_with_records = staffWithRecords;
+  total.by_staff.sort((a, b) => a.staff_name.localeCompare(b.staff_name));
+  return total;
+};
+
 const getTrendRange = ({ range, dateFrom, dateTo }) => {
   const now = new Date();
   const end = endOfDay(now);
@@ -224,6 +467,7 @@ export const getDashboardSummary = async (req, res) => {
       paymentInTrend,
       supplierOutTrend,
       staffOutTrend,
+      staffMonthlySummary,
     ] = await Promise.all([
       aggregateCountAndAmount(Order, "date", "total_amount", businessMatch, todayStart, todayEnd),
       aggregateCountAndAmount(Invoice, "invoice_date", "total_amount", businessMatch, todayStart, todayEnd),
@@ -255,6 +499,11 @@ export const getDashboardSummary = async (req, res) => {
       aggregateTrendByDay(CustomerPayment, "date", "amount", businessMatch, trendStart, trendEnd),
       aggregateTrendByDay(SupplierPayment, "date", "amount", businessMatch, trendStart, trendEnd),
       aggregateTrendByDay(StaffPayment, "date", "amount", businessMatch, trendStart, trendEnd),
+      calculateStaffMonthlySummary({
+        businessMatch,
+        selectedMonth,
+        selectedRange,
+      }),
     ]);
 
     const trendBuckets = buildTrendBuckets(trendStart, trendEnd).map((row) => ({
@@ -292,6 +541,7 @@ export const getDashboardSummary = async (req, res) => {
           expenses: monthExpenses,
           staff_records: monthStaffRecords,
           crp_records: monthCrpRecords,
+          staff_summary: staffMonthlySummary,
           payment_in: monthPaymentIn,
           payment_out: {
             count: monthSupplierOut.count + monthStaffOut.count,
