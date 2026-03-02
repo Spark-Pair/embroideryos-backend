@@ -33,6 +33,8 @@ export const createCrpStaffRecord = async (req, res) => {
   try {
     const {
       order_id,
+      order_date,
+      order_description,
       staff_id,
       type_name,
       rate,
@@ -44,9 +46,6 @@ export const createCrpStaffRecord = async (req, res) => {
     const businessId = businessFilter.businessId || req.body.businessId;
     if (!businessId) return res.status(400).json({ message: "businessId is required" });
 
-    if (!order_id || !mongoose.Types.ObjectId.isValid(order_id)) {
-      return res.status(400).json({ message: "Valid order is required" });
-    }
     if (!staff_id || !mongoose.Types.ObjectId.isValid(staff_id)) {
       return res.status(400).json({ message: "Valid staff is required" });
     }
@@ -57,8 +56,10 @@ export const createCrpStaffRecord = async (req, res) => {
       return res.status(400).json({ message: "Type is required" });
     }
 
+    const shouldResolveOrder = Boolean(order_id && mongoose.Types.ObjectId.isValid(order_id));
+
     const [order, staff, rateConfig] = await Promise.all([
-      Order.findOne({ _id: order_id, ...businessFilter }).lean(),
+      shouldResolveOrder ? Order.findOne({ _id: order_id, ...businessFilter }).lean() : Promise.resolve(null),
       Staff.findOne({ _id: staff_id, ...businessFilter }).select("_id name category").lean(),
       CrpRateConfig.findOne({
         category,
@@ -68,7 +69,7 @@ export const createCrpStaffRecord = async (req, res) => {
       }).lean(),
     ]);
 
-    if (!order) return res.status(404).json({ message: "Order not found" });
+    if (shouldResolveOrder && !order) return res.status(404).json({ message: "Order not found" });
     if (!staff) return res.status(404).json({ message: "Staff not found" });
     if (staff.category !== "Cropping") {
       return res.status(400).json({ message: "Selected staff is not in Cropping category" });
@@ -77,22 +78,18 @@ export const createCrpStaffRecord = async (req, res) => {
       return res.status(404).json({ message: "CRP category/type config not found or inactive" });
     }
 
-    const existingRecord = await CrpStaffRecord.findOne({
-      order_id: order._id,
-      ...businessFilter,
-    })
-      .select("_id")
-      .lean();
-    if (existingRecord) {
-      return res.status(409).json({ message: "CRP record already exists for this order" });
+    const resolvedDateRaw = order?.date || order_date;
+    const resolvedDate = resolvedDateRaw ? new Date(resolvedDateRaw) : null;
+    if (!resolvedDate || Number.isNaN(resolvedDate.getTime())) {
+      return res.status(400).json({ message: "Valid order date is required" });
     }
 
-    const orderQtyDzn = order.unit === "Pcs"
-      ? toNum(order.quantity) / 12
-      : toNum(order.quantity);
+    const orderQtyDzn = order
+      ? (order.unit === "Pcs" ? toNum(order.quantity) / 12 : toNum(order.quantity))
+      : 0;
 
     const resolvedQtyDzn = quantity_dzn === undefined || quantity_dzn === null || quantity_dzn === ""
-      ? orderQtyDzn
+      ? (order ? orderQtyDzn : 0)
       : toNum(quantity_dzn);
 
     if (resolvedQtyDzn <= 0) {
@@ -105,12 +102,12 @@ export const createCrpStaffRecord = async (req, res) => {
     }
 
     const totalAmount = resolvedQtyDzn * resolvedRate;
-    const month = new Date(order.date).toISOString().slice(0, 7);
+    const month = resolvedDate.toISOString().slice(0, 7);
 
     const record = await CrpStaffRecord.create({
-      order_id: order._id,
-      order_date: order.date,
-      order_description: order.description || "",
+      order_id: order?._id || null,
+      order_date: resolvedDate,
+      order_description: (order_description ?? order?.description ?? "").trim(),
       quantity_dzn: resolvedQtyDzn,
       staff_id: staff._id,
       staff_name: staff.name,

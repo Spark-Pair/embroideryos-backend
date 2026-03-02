@@ -5,7 +5,8 @@ const crpStaffRecordSchema = new mongoose.Schema(
     order_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Order",
-      required: true,
+      required: false,
+      default: null,
       index: true,
     },
     order_date: { type: Date, required: true, index: true },

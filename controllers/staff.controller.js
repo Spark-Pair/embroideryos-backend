@@ -196,7 +196,7 @@ export const getStaffNames = async (req, res) => {
     // Fetch paginated data
     const staffs = await Staff.find(filter)
       .sort({ name: 1 })
-      .select('name category joining_date'); // Only select required fields
+      .select("name category joining_date salary"); // Staff record form needs salary for amount preview
     
     res.json({
       data: staffs,
