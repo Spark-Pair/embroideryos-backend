@@ -98,6 +98,31 @@ function calcTotals(rows, config) {
   );
 }
 
+const buildEffectivePercentExpr = () => ({
+  $cond: [
+    { $ne: ["$fix_amount", null] },
+    null,
+    {
+      $cond: [
+        { $gt: [{ $ifNull: ["$totals.on_target_amt", 0] }, 0] },
+        {
+          $cond: [
+            {
+              $gte: [
+                { $ifNull: ["$totals.on_target_amt", 0] },
+                { $ifNull: ["$config_snapshot.target_amount", 0] },
+              ],
+            },
+            { $ifNull: ["$config_snapshot.after_target_pct", null] },
+            { $ifNull: ["$config_snapshot.on_target_pct", null] },
+          ],
+        },
+        null,
+      ],
+    },
+  ],
+});
+
 // ─── Base amount logic ────────────────────────────────────────────────────────
 /**
  * Returns { base_amount, resolvedAttendance }
@@ -291,7 +316,7 @@ export const createStaffRecord = async (req, res) => {
 
 export const getStaffRecords = async (req, res) => {
   try {
-    const { page = 1, limit = 30, staff_id, attendance, date_from, date_to } = req.query;
+    const { page = 1, limit = 30, staff_id, attendance, percent, date_from, date_to } = req.query;
     const businessFilter = buildBusinessFilter(req);
     if (!businessFilter) {
       return res.status(400).json({ message: "Invalid businessId" });
@@ -329,6 +354,13 @@ export const getStaffRecords = async (req, res) => {
       filter.staff_id = requestedStaffId;
     }
     if (attendance) filter.attendance = attendance;
+    if (percent !== undefined && percent !== "") {
+      const percentValue = Number(percent);
+      if (!Number.isFinite(percentValue)) {
+        return res.status(400).json({ message: "Invalid percent filter" });
+      }
+      filter.$expr = { $eq: [buildEffectivePercentExpr(), percentValue] };
+    }
     if (date_from || date_to) {
       filter.date = {};
       if (date_from) filter.date.$gte = new Date(date_from);
@@ -481,7 +513,7 @@ export const deleteStaffRecord = async (req, res) => {
 
 export const getStaffRecordStats = async (req, res) => {
   try {
-    const { staff_id, date_from, date_to } = req.query;
+    const { staff_id, attendance, percent, date_from, date_to } = req.query;
     const businessFilter = buildBusinessFilter(req);
     if (!businessFilter) {
       return res.status(400).json({ message: "Invalid businessId" });
@@ -521,6 +553,16 @@ export const getStaffRecordStats = async (req, res) => {
         });
       }
       matchStage.staff_id = requestedStaffId;
+    }
+    if (attendance) {
+      matchStage.attendance = attendance;
+    }
+    if (percent !== undefined && percent !== "") {
+      const percentValue = Number(percent);
+      if (!Number.isFinite(percentValue)) {
+        return res.status(400).json({ message: "Invalid percent filter" });
+      }
+      matchStage.$expr = { $eq: [buildEffectivePercentExpr(), percentValue] };
     }
     if (date_from || date_to) {
       matchStage.date = {};
