@@ -81,7 +81,7 @@ export const login = async (req, res) => {
       return res.status(403).json({ message: 'Your account has been deactivated' });
     }
 
-    // Check for existing active session
+    // Enforce single active session per user
     const existingSession = await SessionService.hasActiveSession(user._id);
     if (existingSession) {
       return res.status(409).json({

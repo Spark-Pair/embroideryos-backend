@@ -47,6 +47,9 @@ const staffRecordSchema = new mongoose.Schema(
 
     // Set by user to override all calculated amounts for the day
     fix_amount:   { type: Number, default: null },
+    // For non-salary staff when target is not met:
+    // if true, use after_target amount instead of on_target amount
+    force_after_target_for_non_target: { type: Boolean, default: false },
 
     // Bonus
     bonus_qty:    { type: Number, default: 0 },   // how many bonuses

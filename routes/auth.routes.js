@@ -1,7 +1,6 @@
 import express from 'express';
 import {
   login,
-  forceLogin,
   logout,
   logoutAll,
   me,
@@ -15,7 +14,6 @@ import authenticate from '../middlewares/auth.js';
 const router = express.Router();
 
 router.post('/login', login);
-router.post('/force-login', forceLogin);
 router.post('/refresh', refreshToken);
 router.post('/logout', authenticate, logout);
 router.post('/logout-all', authenticate, logoutAll);
