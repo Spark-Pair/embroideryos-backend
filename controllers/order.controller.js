@@ -259,6 +259,7 @@ export const getOrders = async (req, res) => {
       page = 1,
       limit = 30,
       customer_name,
+      description,
       machine_no,
       date_from,
       date_to,
@@ -271,6 +272,9 @@ export const getOrders = async (req, res) => {
 
     if (customer_name && customer_name.trim()) {
       filter.customer_name = { $regex: customer_name.trim(), $options: "i" };
+    }
+    if (description && description.trim()) {
+      filter.description = { $regex: description.trim(), $options: "i" };
     }
     if (machine_no && machine_no.trim()) {
       filter.machine_no = { $regex: machine_no.trim(), $options: "i" };
@@ -310,7 +314,7 @@ export const getOrders = async (req, res) => {
 
 export const getOrderStats = async (req, res) => {
   try {
-    const { customer_name, machine_no, date_from, date_to, businessId } = req.query;
+    const { customer_name, description, machine_no, date_from, date_to, businessId } = req.query;
 
     const match = {
       ...getBusinessFilter(req, businessId),
@@ -318,6 +322,9 @@ export const getOrderStats = async (req, res) => {
 
     if (customer_name && customer_name.trim()) {
       match.customer_name = { $regex: customer_name.trim(), $options: "i" };
+    }
+    if (description && description.trim()) {
+      match.description = { $regex: description.trim(), $options: "i" };
     }
     if (machine_no && machine_no.trim()) {
       match.machine_no = { $regex: machine_no.trim(), $options: "i" };
