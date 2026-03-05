@@ -2,6 +2,8 @@
 import Business from "../models/Business.js";
 import User from "../models/User.js";
 import Subscription from "../models/Subscription.js";
+import Invoice from "../models/Invoice.js";
+import InvoiceCounter from "../models/InvoiceCounter.js";
 import mongoose from "mongoose";
 import cloudinary from "../services/cloudinary.js";
 import { getPlanById, isFeatureEnabled } from "../services/plan.service.js";
@@ -254,5 +256,77 @@ export const updateMyInvoiceBanner = async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: "Failed to update invoice banner" });
+  }
+};
+
+export const getMyInvoiceCounter = async (req, res) => {
+  try {
+    const businessId = resolveBusinessId(req, req.query.businessId);
+    if (!businessId) return res.status(400).json({ message: "Business ID is required" });
+
+    const businessObjectId = new mongoose.Types.ObjectId(businessId);
+    const year = Number(req.query?.year) || new Date().getFullYear();
+    const [invoiceCount, counter] = await Promise.all([
+      Invoice.countDocuments({ businessId: businessObjectId }),
+      InvoiceCounter.findOne({ businessId: businessObjectId, year }).lean(),
+    ]);
+
+    const lastInvoiceNo = Number(counter?.seq || 0);
+    const canUpdate = invoiceCount === 0;
+
+    return res.json({
+      year,
+      last_invoice_no: lastInvoiceNo,
+      next_invoice_no: lastInvoiceNo + 1,
+      can_update: canUpdate,
+      has_invoices: invoiceCount > 0,
+      invoice_count: invoiceCount,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Failed to fetch invoice counter" });
+  }
+};
+
+export const updateMyInvoiceCounter = async (req, res) => {
+  try {
+    const businessId = resolveBusinessId(req, req.body?.businessId || req.query.businessId);
+    if (!businessId) return res.status(400).json({ message: "Business ID is required" });
+
+    const year = Number(req.body?.year) || new Date().getFullYear();
+    const parsedLastInvoiceNo = Number(req.body?.last_invoice_no);
+    if (!Number.isInteger(parsedLastInvoiceNo) || parsedLastInvoiceNo < 0) {
+      return res.status(400).json({ message: "last_invoice_no must be a non-negative integer" });
+    }
+
+    const businessObjectId = new mongoose.Types.ObjectId(businessId);
+    const invoiceCount = await Invoice.countDocuments({ businessId: businessObjectId });
+    if (invoiceCount > 0) {
+      return res.status(409).json({
+        message: "Cannot change invoice counter after invoice creation",
+        code: "INVOICE_COUNTER_LOCKED",
+      });
+    }
+
+    await InvoiceCounter.findOneAndUpdate(
+      { businessId: businessObjectId, year },
+      {
+        $setOnInsert: { businessId: businessObjectId, year },
+        $set: { seq: parsedLastInvoiceNo },
+      },
+      { upsert: true, new: true }
+    );
+
+    return res.json({
+      year,
+      last_invoice_no: parsedLastInvoiceNo,
+      next_invoice_no: parsedLastInvoiceNo + 1,
+      can_update: true,
+      has_invoices: false,
+      invoice_count: 0,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Failed to update invoice counter" });
   }
 };

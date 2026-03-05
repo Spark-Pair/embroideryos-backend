@@ -8,6 +8,8 @@ import {
   toggleBusinessStatus,
   getMyInvoiceBanner,
   updateMyInvoiceBanner,
+  getMyInvoiceCounter,
+  updateMyInvoiceCounter,
 } from "../controllers/business.controller.js";
 
 import allowedRoles from '../middlewares/role.js';
@@ -32,6 +34,18 @@ router.patch(
   subscriptionMiddleware,
   requireFeature("invoice_banner"),
   updateMyInvoiceBanner
+);
+router.get(
+  "/me/invoice-counter",
+  allowedRoles(['developer', 'admin', 'staff']),
+  subscriptionMiddleware,
+  getMyInvoiceCounter
+);
+router.patch(
+  "/me/invoice-counter",
+  allowedRoles(['developer', 'admin', 'staff']),
+  subscriptionMiddleware,
+  updateMyInvoiceCounter
 );
 router.get("/:id", getBusiness);             // Details
 router.put("/:id", allowedRoles(['developer']), updateBusiness);          // Edit
