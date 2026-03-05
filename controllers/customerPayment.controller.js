@@ -27,15 +27,13 @@ const buildBusinessFilter = (req) => {
 const validateByMethod = ({ method, referenceNo, bankName, partyName, chequeDate, clearDate }) => {
   if (method === "online") {
     if (!referenceNo) return "Reference number is required for online payments";
-    if (!bankName) return "Bank name is required for online payments";
   }
 
   if (method === "cheque") {
     if (!referenceNo) return "Reference number is required for cheque payments";
     if (!bankName) return "Bank name is required for cheque payments";
     if (!chequeDate) return "Cheque date is required for cheque payments";
-    if (!clearDate) return "Clear date is required for cheque payments";
-    if (new Date(clearDate) < new Date(chequeDate)) {
+    if (clearDate && new Date(clearDate) < new Date(chequeDate)) {
       return "Clear date must be greater than or equal to cheque date";
     }
   }
@@ -44,8 +42,7 @@ const validateByMethod = ({ method, referenceNo, bankName, partyName, chequeDate
     if (!referenceNo) return "Reference number is required for slip payments";
     if (!partyName) return "Party name is required for slip payments";
     if (!chequeDate) return "Slip date is required for slip payments";
-    if (!clearDate) return "Clear date is required for slip payments";
-    if (new Date(clearDate) < new Date(chequeDate)) {
+    if (clearDate && new Date(clearDate) < new Date(chequeDate)) {
       return "Clear date must be greater than or equal to slip date";
     }
   }
