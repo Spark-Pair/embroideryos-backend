@@ -107,17 +107,18 @@ const buildEffectivePercentExpr = () => ({
         { $gt: [{ $ifNull: ["$totals.on_target_amt", 0] }, 0] },
         {
           $cond: [
-            {
-              $or: [
                 {
-                  $gte: [
-                    { $ifNull: ["$totals.on_target_amt", 0] },
-                    { $ifNull: ["$config_snapshot.target_amount", 0] },
+                  $or: [
+                    {
+                      $gte: [
+                        { $ifNull: ["$totals.on_target_amt", 0] },
+                        { $ifNull: ["$config_snapshot.target_amount", 0] },
+                      ],
+                    },
+                    { $eq: [{ $ifNull: ["$force_after_target_for_non_target", false] }, true] },
+                    { $eq: [{ $ifNull: ["$force_full_target_for_non_target", false] }, true] },
                   ],
                 },
-                { $eq: [{ $ifNull: ["$force_after_target_for_non_target", false] }, true] },
-              ],
-            },
             { $ifNull: ["$config_snapshot.after_target_pct", null] },
             { $ifNull: ["$config_snapshot.on_target_pct", null] },
           ],
@@ -133,12 +134,23 @@ const buildEffectivePercentExpr = () => ({
  * Returns { base_amount, resolvedAttendance }
  * resolvedAttendance may differ from input if Half → Day upgrade happens
  */
-function resolveBaseAmount({ attendance, totals, salary, config, forceAfterTargetForNonTarget = false }) {
+function resolveBaseAmount({
+  attendance,
+  totals,
+  salary,
+  config,
+  forceAfterTargetForNonTarget = false,
+  forceFullTargetForNonTarget = false,
+}) {
   const hasSalary    = salary != null && salary > 0;
   const perDay       = hasSalary ? salary / 30 : 0;
   const perHalfDay   = hasSalary ? salary / 60 : 0;
   const targetAmount = config.target_amount ?? 1000;
   const offAmount    = config.off_amount    ?? 0;
+  const onTargetPct = config.on_target_pct ?? 0;
+  const afterTargetPct = config.after_target_pct ?? 0;
+  const fullTargetAfterAmount =
+    onTargetPct > 0 ? (targetAmount / onTargetPct) * afterTargetPct : targetAmount;
 
   let base_amount        = 0;
   let resolvedAttendance = attendance;
@@ -159,9 +171,13 @@ function resolveBaseAmount({ attendance, totals, salary, config, forceAfterTarge
     } else {
       // Non-salary: use production amount; if on-target → upgrade to Day
       const productionAmt = totals
-        ? ((totals.on_target_amt >= targetAmount || forceAfterTargetForNonTarget)
+        ? (
+            forceFullTargetForNonTarget
+              ? fullTargetAfterAmount
+              : (totals.on_target_amt >= targetAmount || forceAfterTargetForNonTarget)
             ? totals.after_target_amt
-            : totals.on_target_amt)
+            : totals.on_target_amt
+          )
         : 0;
 
       if (totals && totals.on_target_amt >= targetAmount) {
@@ -177,9 +193,13 @@ function resolveBaseAmount({ attendance, totals, salary, config, forceAfterTarge
       base_amount = perDay;
     } else {
       base_amount = totals
-        ? ((totals.on_target_amt >= targetAmount || forceAfterTargetForNonTarget)
+        ? (
+            forceFullTargetForNonTarget
+              ? fullTargetAfterAmount
+              : (totals.on_target_amt >= targetAmount || forceAfterTargetForNonTarget)
             ? totals.after_target_amt
-            : totals.on_target_amt)
+            : totals.on_target_amt
+          )
         : 0;
     }
   }
@@ -199,10 +219,12 @@ async function buildRecordPayload({
   fix_amount,
   config,
   force_after_target_for_non_target = false,
+  force_full_target_for_non_target = false,
 }) {
   // Fetch staff to get salary
   const staff = await Staff.findById(staff_id).select("salary category").lean();
   const salary = staff?.salary ?? null;
+  const canUseTargetOverrides = !(salary != null && salary > 0);
 
   const hasProduction    = !NO_PRODUCTION.has(attendance);
   const cleanRows        = hasProduction ? (production || []) : [];
@@ -224,6 +246,14 @@ async function buildRecordPayload({
   const totals = hasProduction && recalculatedRows.length > 0
     ? calcTotals(recalculatedRows, config)
     : null;
+  const useFullTargetForNonTarget =
+    Boolean(force_full_target_for_non_target) &&
+    canUseTargetOverrides &&
+    !(totals && totals.on_target_amt >= (config.target_amount ?? 0));
+  const useAfterTargetForNonTarget =
+    Boolean(force_after_target_for_non_target) &&
+    canUseTargetOverrides &&
+    !useFullTargetForNonTarget;
 
   // Base amount + possible attendance upgrade
   const { base_amount, resolvedAttendance } = resolveBaseAmount({
@@ -231,7 +261,8 @@ async function buildRecordPayload({
     totals,
     salary,
     config,
-    forceAfterTargetForNonTarget: Boolean(force_after_target_for_non_target) && !(salary != null && salary > 0),
+    forceAfterTargetForNonTarget: useAfterTargetForNonTarget,
+    forceFullTargetForNonTarget: useFullTargetForNonTarget,
   });
 
   // Bonus — not allowed on Absent/Off/Close/Sunday
@@ -254,7 +285,8 @@ async function buildRecordPayload({
     bonus_rate:  effectiveBonusRate,
     bonus_amount,
     fix_amount:  fix_amount ?? null,
-    force_after_target_for_non_target: Boolean(force_after_target_for_non_target) && !(salary != null && salary > 0),
+    force_after_target_for_non_target: useAfterTargetForNonTarget,
+    force_full_target_for_non_target: useFullTargetForNonTarget,
     final_amount,
     config_snapshot: {
       stitch_rate:      config.stitch_rate,
@@ -283,6 +315,7 @@ export const createStaffRecord = async (req, res) => {
       bonus_rate_override,   // if user manually sets per-bonus rate
       fix_amount,
       force_after_target_for_non_target = false,
+      force_full_target_for_non_target = false,
     } = req.body;
     const businessFilter = buildBusinessFilter(req, false);
     if (!businessFilter) {
@@ -315,6 +348,7 @@ export const createStaffRecord = async (req, res) => {
       staff_id, date, attendance, production,
       bonus_qty, bonus_rate_override, fix_amount, config,
       force_after_target_for_non_target,
+      force_full_target_for_non_target,
     });
 
     const record = await StaffRecord.create({
@@ -475,6 +509,7 @@ export const updateStaffRecord = async (req, res) => {
       bonus_rate_override,
       fix_amount,
       force_after_target_for_non_target,
+      force_full_target_for_non_target,
     } = req.body;
 
     const businessFilter = buildBusinessFilter(req);
@@ -502,6 +537,10 @@ export const updateStaffRecord = async (req, res) => {
         force_after_target_for_non_target !== undefined
           ? force_after_target_for_non_target
           : record.force_after_target_for_non_target,
+      force_full_target_for_non_target:
+        force_full_target_for_non_target !== undefined
+          ? force_full_target_for_non_target
+          : record.force_full_target_for_non_target,
       config,
     });
 

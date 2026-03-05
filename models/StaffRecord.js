@@ -50,6 +50,9 @@ const staffRecordSchema = new mongoose.Schema(
     // For non-salary staff when target is not met:
     // if true, use after_target amount instead of on_target amount
     force_after_target_for_non_target: { type: Boolean, default: false },
+    // For non-salary staff when target is not met:
+    // if true, treat amount as full target and apply after_target percentage
+    force_full_target_for_non_target: { type: Boolean, default: false },
 
     // Bonus
     bonus_qty:    { type: Number, default: 0 },   // how many bonuses
