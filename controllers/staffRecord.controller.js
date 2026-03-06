@@ -220,9 +220,10 @@ async function buildRecordPayload({
   config,
   force_after_target_for_non_target = false,
   force_full_target_for_non_target = false,
+  businessFilter = {},
 }) {
   // Fetch staff to get salary
-  const staff = await Staff.findById(staff_id).select("salary category").lean();
+  const staff = await Staff.findOne({ _id: staff_id, ...businessFilter }).select("salary category").lean();
   const salary = staff?.salary ?? null;
   const canUseTargetOverrides = !(salary != null && salary > 0);
 
@@ -349,6 +350,7 @@ export const createStaffRecord = async (req, res) => {
       bonus_qty, bonus_rate_override, fix_amount, config,
       force_after_target_for_non_target,
       force_full_target_for_non_target,
+      businessFilter,
     });
 
     const record = await StaffRecord.create({
@@ -542,6 +544,7 @@ export const updateStaffRecord = async (req, res) => {
           ? force_full_target_for_non_target
           : record.force_full_target_for_non_target,
       config,
+      businessFilter,
     });
 
     Object.assign(record, payload);

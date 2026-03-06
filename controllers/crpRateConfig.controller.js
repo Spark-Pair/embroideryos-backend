@@ -85,8 +85,9 @@ export const updateCrpRateConfig = async (req, res) => {
   try {
     const { type_name, rate } = req.body;
     const nextCategory = normalizeCategory(req.body.category);
+    const businessFilter = buildBusinessFilter(req, req.body.businessId || req.query.businessId);
 
-    const item = await CrpRateConfig.findById(req.params.id);
+    const item = await CrpRateConfig.findOne({ _id: req.params.id, ...businessFilter });
     if (!item) return res.status(404).json({ message: "CRP rate config not found" });
 
     if (req.body.category !== undefined) {
@@ -124,7 +125,8 @@ export const updateCrpRateConfig = async (req, res) => {
 
 export const toggleCrpRateConfigStatus = async (req, res) => {
   try {
-    const item = await CrpRateConfig.findById(req.params.id);
+    const businessFilter = buildBusinessFilter(req, req.body.businessId || req.query.businessId);
+    const item = await CrpRateConfig.findOne({ _id: req.params.id, ...businessFilter });
     if (!item) return res.status(404).json({ message: "CRP rate config not found" });
 
     item.isActive = !item.isActive;

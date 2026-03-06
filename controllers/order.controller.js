@@ -162,7 +162,9 @@ async function buildOrderPayload(body, businessFilter = {}) {
   let resolvedCustomerBaseRate = toNum(customer_base_rate);
 
   if (customer_id && mongoose.Types.ObjectId.isValid(customer_id)) {
-    const customer = await Customer.findById(customer_id).select("name rate").lean();
+    const customerQuery = { _id: customer_id };
+    if (businessFilter?.businessId) customerQuery.businessId = businessFilter.businessId;
+    const customer = await Customer.findOne(customerQuery).select("name rate").lean();
     if (customer) {
       resolvedCustomerName = customer.name || resolvedCustomerName;
       resolvedCustomerBaseRate = toNum(customer.rate);
@@ -238,6 +240,15 @@ export const createOrder = async (req, res) => {
       if (existingByRef) {
         return res.status(200).json({ success: true, data: existingByRef, duplicate: true });
       }
+    }
+    const scopedCustomer = await Customer.findOne({
+      _id: customer_id,
+      ...businessFilter,
+    })
+      .select("_id")
+      .lean();
+    if (!scopedCustomer) {
+      return res.status(404).json({ message: "Customer not found" });
     }
 
     const payload = await buildOrderPayload(req.body, businessFilter);
@@ -373,6 +384,13 @@ export const updateOrder = async (req, res) => {
     const scope = getBusinessFilter(req, req.query.businessId);
     const existing = await Order.findOne({ _id: req.params.id, ...scope });
     if (!existing) return res.status(404).json({ message: "Order not found" });
+    const nextCustomerId = req.body.customer_id || existing.customer_id;
+    const scopedCustomer = await Customer.findOne({ _id: nextCustomerId, ...scope })
+      .select("_id")
+      .lean();
+    if (!scopedCustomer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
 
     const payload = await buildOrderPayload({
       ...existing.toObject(),

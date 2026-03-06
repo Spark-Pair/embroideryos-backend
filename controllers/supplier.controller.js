@@ -147,7 +147,8 @@ export const getSuppliersStats = async (req, res) => {
 
 export const getSupplier = async (req, res) => {
   try {
-    const supplier = await Supplier.findById(req.params.id).lean();
+    const filter = buildBusinessFilter(req, req.query.businessId);
+    const supplier = await Supplier.findOne({ _id: req.params.id, ...filter }).lean();
     if (!supplier) return res.status(404).json({ message: "Supplier not found" });
     const [supplierWithBalance] = await attachSupplierCurrentBalance([supplier], { businessId: supplier.businessId });
     return res.json(supplierWithBalance);
@@ -160,8 +161,9 @@ export const getSupplier = async (req, res) => {
 export const updateSupplier = async (req, res) => {
   try {
     const { opening_balance } = req.body;
+    const filter = buildBusinessFilter(req, req.body.businessId);
 
-    const supplier = await Supplier.findById(req.params.id);
+    const supplier = await Supplier.findOne({ _id: req.params.id, ...filter });
     if (!supplier) return res.status(404).json({ message: "Supplier not found" });
 
     if (opening_balance !== undefined) {
@@ -178,7 +180,8 @@ export const updateSupplier = async (req, res) => {
 
 export const toggleSupplierStatus = async (req, res) => {
   try {
-    const supplier = await Supplier.findById(req.params.id);
+    const filter = buildBusinessFilter(req, req.body.businessId || req.query.businessId);
+    const supplier = await Supplier.findOne({ _id: req.params.id, ...filter });
     if (!supplier) return res.status(404).json({ message: "Supplier not found" });
 
     supplier.isActive = !supplier.isActive;

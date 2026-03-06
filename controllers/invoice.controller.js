@@ -139,7 +139,15 @@ export const createInvoice = async (req, res) => {
 
     const totalAmount = orders.reduce((sum, order) => sum + toNum(order.total_amount), 0);
     const customerName = orders[0]?.customer_name || "";
-    const customer = await Customer.findById(customer_id).select("person").lean();
+    const customer = await Customer.findOne({
+      _id: customer_id,
+      ...scope,
+    })
+      .select("person")
+      .lean();
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
     const customerPerson = customer?.person || "";
     const invoiceDateValue = invoice_date ? new Date(invoice_date) : new Date();
     const invoiceYear = invoiceDateValue.getFullYear();
@@ -179,7 +187,10 @@ export const createInvoice = async (req, res) => {
     });
 
     await Order.updateMany(
-      { _id: { $in: uniqueOrderIds } },
+      {
+        ...scope,
+        _id: { $in: uniqueOrderIds },
+      },
       { $set: { invoice_id: invoice._id, invoiced_at: invoice.invoice_date } }
     );
 
@@ -248,11 +259,16 @@ export const getInvoice = async (req, res) => {
     const invoice = await Invoice.findOne({ _id: req.params.id, ...scope }).lean();
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
 
-    const orders = await Order.find({ _id: { $in: invoice.order_ids } })
+    const orders = await Order.find({
+      ...scope,
+      _id: { $in: invoice.order_ids },
+    })
       .sort({ date: -1, createdAt: -1 })
       .lean();
 
-    const customer = await Customer.findById(invoice.customer_id).select("opening_balance").lean();
+    const customer = await Customer.findOne({ _id: invoice.customer_id, ...scope })
+      .select("opening_balance")
+      .lean();
     const openingBalance = toNum(customer?.opening_balance);
 
     const priorInvoices = await Invoice.aggregate([

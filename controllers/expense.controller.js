@@ -289,8 +289,9 @@ export const getExpenseStats = async (req, res) => {
 export const updateExpense = async (req, res) => {
   try {
     const { item_name, quantity, rate, amount, date, reference_no, remarks } = req.body;
+    const businessFilter = buildBusinessFilter(req, req.body.businessId || req.query.businessId);
 
-    const expense = await Expense.findById(req.params.id);
+    const expense = await Expense.findOne({ _id: req.params.id, ...businessFilter });
     if (!expense) return res.status(404).json({ message: "Expense not found" });
 
     if (item_name !== undefined) {
@@ -343,7 +344,8 @@ export const updateExpense = async (req, res) => {
 
 export const deleteExpense = async (req, res) => {
   try {
-    const expense = await Expense.findByIdAndDelete(req.params.id);
+    const businessFilter = buildBusinessFilter(req, req.body.businessId || req.query.businessId);
+    const expense = await Expense.findOneAndDelete({ _id: req.params.id, ...businessFilter });
     if (!expense) return res.status(404).json({ message: "Expense not found" });
     return res.json({ success: true, id: expense._id });
   } catch (err) {
