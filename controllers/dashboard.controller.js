@@ -151,6 +151,315 @@ const parseDateInput = (value) => {
 const isAllowanceEligible = ({ recordCount, absentCount, halfCount }) =>
   recordCount >= 26 && absentCount === 0 && halfCount <= 1;
 
+const calculateCustomerMonthlySummary = async ({ businessMatch, selectedRange }) => {
+  const customers = await Customer.find(businessMatch)
+    .select("_id name opening_balance isActive")
+    .lean();
+
+  if (!customers.length) {
+    return {
+      customer_count: 0,
+      active_customer_count: 0,
+      customer_with_activity: 0,
+      billed_amount: 0,
+      received_amount: 0,
+      opening_amount: 0,
+      balance_amount: 0,
+      by_customer: [],
+    };
+  }
+
+  const customerIds = customers.map((row) => row._id);
+
+  const [invoices, payments] = await Promise.all([
+    Invoice.find({
+      ...businessMatch,
+      customer_id: { $in: customerIds },
+      invoice_date: { $gte: selectedRange.from, $lte: selectedRange.to },
+    })
+      .select("customer_id total_amount")
+      .lean(),
+    CustomerPayment.find({
+      ...businessMatch,
+      customer_id: { $in: customerIds },
+      date: { $gte: selectedRange.from, $lte: selectedRange.to },
+    })
+      .select("customer_id amount")
+      .lean(),
+  ]);
+
+  const byCustomer = new Map(
+    customers.map((row) => [
+      String(row?._id || ""),
+      {
+        customer_id: String(row?._id || ""),
+        customer_name: row?.name || "",
+        is_active: Boolean(row?.isActive),
+        opening_amount: Number(row?.opening_balance || 0),
+        billed_amount: 0,
+        received_amount: 0,
+      },
+    ])
+  );
+
+  invoices.forEach((row) => {
+    const id = String(row?.customer_id || "");
+    const current = byCustomer.get(id);
+    if (!current) return;
+    current.billed_amount += Number(row?.total_amount || 0);
+  });
+
+  payments.forEach((row) => {
+    const id = String(row?.customer_id || "");
+    const current = byCustomer.get(id);
+    if (!current) return;
+    current.received_amount += Number(row?.amount || 0);
+  });
+
+  const total = {
+    customer_count: customers.length,
+    active_customer_count: customers.filter((row) => Boolean(row?.isActive)).length,
+    customer_with_activity: 0,
+    billed_amount: 0,
+    received_amount: 0,
+    opening_amount: 0,
+    balance_amount: 0,
+    by_customer: [],
+  };
+
+  byCustomer.forEach((row) => {
+    const balanceAmount = row.opening_amount + row.billed_amount - row.received_amount;
+    if (row.billed_amount > 0 || row.received_amount > 0) {
+      total.customer_with_activity += 1;
+    }
+
+    total.billed_amount += row.billed_amount;
+    total.received_amount += row.received_amount;
+    total.opening_amount += row.opening_amount;
+    total.balance_amount += balanceAmount;
+    total.by_customer.push({
+      customer_id: row.customer_id,
+      customer_name: row.customer_name,
+      is_active: row.is_active,
+      opening_amount: row.opening_amount,
+      billed_amount: row.billed_amount,
+      received_amount: row.received_amount,
+      balance_amount: balanceAmount,
+    });
+  });
+
+  total.by_customer.sort((a, b) => a.customer_name.localeCompare(b.customer_name));
+  return total;
+};
+
+const calculateSupplierMonthlySummary = async ({ businessMatch, selectedRange }) => {
+  const suppliers = await Supplier.find(businessMatch)
+    .select("_id name opening_balance isActive")
+    .lean();
+
+  if (!suppliers.length) {
+    return {
+      supplier_count: 0,
+      active_supplier_count: 0,
+      supplier_with_activity: 0,
+      expense_amount: 0,
+      paid_amount: 0,
+      opening_amount: 0,
+      balance_amount: 0,
+      by_supplier: [],
+    };
+  }
+
+  const supplierIds = suppliers.map((row) => row._id);
+  const [expenses, payments] = await Promise.all([
+    Expense.find({
+      ...businessMatch,
+      supplier_id: { $in: supplierIds },
+      date: { $gte: selectedRange.from, $lte: selectedRange.to },
+    })
+      .select("supplier_id amount")
+      .lean(),
+    SupplierPayment.find({
+      ...businessMatch,
+      supplier_id: { $in: supplierIds },
+      date: { $gte: selectedRange.from, $lte: selectedRange.to },
+    })
+      .select("supplier_id amount")
+      .lean(),
+  ]);
+
+  const bySupplier = new Map(
+    suppliers.map((row) => [
+      String(row?._id || ""),
+      {
+        supplier_id: String(row?._id || ""),
+        supplier_name: row?.name || "",
+        is_active: Boolean(row?.isActive),
+        opening_amount: Number(row?.opening_balance || 0),
+        expense_amount: 0,
+        paid_amount: 0,
+      },
+    ])
+  );
+
+  expenses.forEach((row) => {
+    const id = String(row?.supplier_id || "");
+    const current = bySupplier.get(id);
+    if (!current) return;
+    current.expense_amount += Number(row?.amount || 0);
+  });
+
+  payments.forEach((row) => {
+    const id = String(row?.supplier_id || "");
+    const current = bySupplier.get(id);
+    if (!current) return;
+    current.paid_amount += Number(row?.amount || 0);
+  });
+
+  const total = {
+    supplier_count: suppliers.length,
+    active_supplier_count: suppliers.filter((row) => Boolean(row?.isActive)).length,
+    supplier_with_activity: 0,
+    expense_amount: 0,
+    paid_amount: 0,
+    opening_amount: 0,
+    balance_amount: 0,
+    by_supplier: [],
+  };
+
+  bySupplier.forEach((row) => {
+    const balanceAmount = row.opening_amount + row.expense_amount - row.paid_amount;
+    if (row.expense_amount > 0 || row.paid_amount > 0) {
+      total.supplier_with_activity += 1;
+    }
+
+    total.expense_amount += row.expense_amount;
+    total.paid_amount += row.paid_amount;
+    total.opening_amount += row.opening_amount;
+    total.balance_amount += balanceAmount;
+    total.by_supplier.push({
+      supplier_id: row.supplier_id,
+      supplier_name: row.supplier_name,
+      is_active: row.is_active,
+      opening_amount: row.opening_amount,
+      expense_amount: row.expense_amount,
+      paid_amount: row.paid_amount,
+      balance_amount: balanceAmount,
+    });
+  });
+
+  total.by_supplier.sort((a, b) => a.supplier_name.localeCompare(b.supplier_name));
+  return total;
+};
+
+const calculateCrpStaffMonthlySummary = async ({ businessMatch, selectedRange }) => {
+  const crpStaff = await Staff.find({
+    ...businessMatch,
+    category: "Cropping",
+  })
+    .select("_id name opening_balance isActive")
+    .lean();
+
+  if (!crpStaff.length) {
+    return {
+      staff_count: 0,
+      active_staff_count: 0,
+      staff_with_activity: 0,
+      record_count: 0,
+      work_amount: 0,
+      arrears_amount: 0,
+      deduction_amount: 0,
+      balance_amount: 0,
+      by_staff: [],
+    };
+  }
+
+  const staffIds = crpStaff.map((row) => row._id);
+  const [records, payments] = await Promise.all([
+    CrpStaffRecord.find({
+      ...businessMatch,
+      staff_id: { $in: staffIds },
+      order_date: { $gte: selectedRange.from, $lte: selectedRange.to },
+    })
+      .select("staff_id total_amount")
+      .lean(),
+    StaffPayment.find({
+      ...businessMatch,
+      staff_id: { $in: staffIds },
+      date: { $gte: selectedRange.from, $lte: selectedRange.to },
+    })
+      .select("staff_id amount")
+      .lean(),
+  ]);
+
+  const byStaff = new Map(
+    crpStaff.map((row) => [
+      String(row?._id || ""),
+      {
+        staff_id: String(row?._id || ""),
+        staff_name: row?.name || "",
+        is_active: Boolean(row?.isActive),
+        arrears_amount: Number(row?.opening_balance || 0),
+        record_count: 0,
+        work_amount: 0,
+        deduction_amount: 0,
+      },
+    ])
+  );
+
+  records.forEach((row) => {
+    const id = String(row?.staff_id || "");
+    const current = byStaff.get(id);
+    if (!current) return;
+    current.record_count += 1;
+    current.work_amount += Number(row?.total_amount || 0);
+  });
+
+  payments.forEach((row) => {
+    const id = String(row?.staff_id || "");
+    const current = byStaff.get(id);
+    if (!current) return;
+    current.deduction_amount += Number(row?.amount || 0);
+  });
+
+  const total = {
+    staff_count: crpStaff.length,
+    active_staff_count: crpStaff.filter((row) => Boolean(row?.isActive)).length,
+    staff_with_activity: 0,
+    record_count: 0,
+    work_amount: 0,
+    arrears_amount: 0,
+    deduction_amount: 0,
+    balance_amount: 0,
+    by_staff: [],
+  };
+
+  byStaff.forEach((row) => {
+    if (row.record_count > 0 || row.deduction_amount > 0) {
+      total.staff_with_activity += 1;
+    }
+    const balanceAmount = row.arrears_amount + row.work_amount - row.deduction_amount;
+    total.record_count += row.record_count;
+    total.work_amount += row.work_amount;
+    total.arrears_amount += row.arrears_amount;
+    total.deduction_amount += row.deduction_amount;
+    total.balance_amount += balanceAmount;
+    total.by_staff.push({
+      staff_id: row.staff_id,
+      staff_name: row.staff_name,
+      is_active: row.is_active,
+      records: row.record_count,
+      arrears_amount: row.arrears_amount,
+      work_amount: row.work_amount,
+      deduction_amount: row.deduction_amount,
+      balance_amount: balanceAmount,
+    });
+  });
+
+  total.by_staff.sort((a, b) => a.staff_name.localeCompare(b.staff_name));
+  return total;
+};
+
 const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, selectedRange }) => {
   const prevMonthKey = previousMonth(selectedMonth);
   const prevMonthEnd = monthRange(prevMonthKey).to;
@@ -468,6 +777,9 @@ export const getDashboardSummary = async (req, res) => {
       supplierOutTrend,
       staffOutTrend,
       staffMonthlySummary,
+      customerMonthlySummary,
+      supplierMonthlySummary,
+      crpStaffMonthlySummary,
     ] = await Promise.all([
       aggregateCountAndAmount(Order, "date", "total_amount", businessMatch, todayStart, todayEnd),
       aggregateCountAndAmount(Invoice, "invoice_date", "total_amount", businessMatch, todayStart, todayEnd),
@@ -502,6 +814,18 @@ export const getDashboardSummary = async (req, res) => {
       calculateStaffMonthlySummary({
         businessMatch,
         selectedMonth,
+        selectedRange,
+      }),
+      calculateCustomerMonthlySummary({
+        businessMatch,
+        selectedRange,
+      }),
+      calculateSupplierMonthlySummary({
+        businessMatch,
+        selectedRange,
+      }),
+      calculateCrpStaffMonthlySummary({
+        businessMatch,
         selectedRange,
       }),
     ]);
@@ -542,6 +866,9 @@ export const getDashboardSummary = async (req, res) => {
           staff_records: monthStaffRecords,
           crp_records: monthCrpRecords,
           staff_summary: staffMonthlySummary,
+          customer_summary: customerMonthlySummary,
+          supplier_summary: supplierMonthlySummary,
+          crp_staff_summary: crpStaffMonthlySummary,
           payment_in: monthPaymentIn,
           payment_out: {
             count: monthSupplierOut.count + monthStaffOut.count,
