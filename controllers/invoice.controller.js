@@ -6,7 +6,7 @@ import Customer from "../models/Customer.js";
 import CustomerPayment from "../models/CustomerPayment.js";
 import cloudinary from "../services/cloudinary.js";
 
-const MAX_INVOICE_ORDERS = 8;
+const MAX_INVOICE_ORDERS = 7;
 
 function toNum(val) {
   if (val === "" || val == null) return 0;
