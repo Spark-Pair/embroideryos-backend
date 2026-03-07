@@ -51,7 +51,7 @@ export const getInvoiceOrderGroups = async (req, res) => {
 
     const orders = await Order.find(filter)
       .sort({ date: 1, createdAt: 1 })
-      .select("_id customer_id customer_name date lot_no machine_no quantity unit qt_pcs rate total_amount")
+      .select("_id customer_id customer_name date description lot_no machine_no quantity unit qt_pcs design_stitches rate total_amount")
       .lean();
 
     const grouped = new Map();
@@ -232,7 +232,7 @@ export const getInvoices = async (req, res) => {
 
     const total = await Invoice.countDocuments(filter);
     const data = await Invoice.find(filter)
-      .sort({ invoice_date: -1, createdAt: -1 })
+      .sort({ invoice_number: -1, invoice_date: -1, createdAt: -1 })
       .skip(skip)
       .limit(parsedLimit)
       .lean();
