@@ -50,7 +50,7 @@ export const getInvoiceOrderGroups = async (req, res) => {
     }
 
     const orders = await Order.find(filter)
-      .sort({ date: -1, createdAt: -1 })
+      .sort({ date: 1, createdAt: 1 })
       .select("_id customer_id customer_name date lot_no machine_no quantity unit qt_pcs rate total_amount")
       .lean();
 
@@ -63,7 +63,7 @@ export const getInvoiceOrderGroups = async (req, res) => {
         grouped.set(key, {
           customer_id: order.customer_id,
           customer_name: order.customer_name,
-          latest_order_date: order.date,
+          oldest_order_date: order.date,
           total_orders: 1,
           total_amount: toNum(order.total_amount),
           orders: [order],
@@ -77,9 +77,9 @@ export const getInvoiceOrderGroups = async (req, res) => {
     });
 
     const data = Array.from(grouped.values()).sort((a, b) => {
-      const aTime = new Date(a.latest_order_date).getTime();
-      const bTime = new Date(b.latest_order_date).getTime();
-      return bTime - aTime;
+      const aTime = new Date(a.oldest_order_date).getTime();
+      const bTime = new Date(b.oldest_order_date).getTime();
+      return aTime - bTime;
     });
 
     return res.json({ success: true, data });
