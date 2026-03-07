@@ -37,6 +37,21 @@ function isValidInvoiceImagePayload(value) {
   return value.length <= 8_000_000;
 }
 
+function startOfDay(value) {
+  const d = new Date(value);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function toDateInput(value = new Date()) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export const getInvoiceOrderGroups = async (req, res) => {
   try {
     const scope = getBusinessFilter(req, req.query.businessId);
@@ -49,10 +64,13 @@ export const getInvoiceOrderGroups = async (req, res) => {
       filter.customer_name = { $regex: req.query.customer_name.trim(), $options: "i" };
     }
 
-    const orders = await Order.find(filter)
-      .sort({ date: 1, createdAt: 1 })
-      .select("_id customer_id customer_name date description lot_no machine_no quantity unit qt_pcs design_stitches rate total_amount")
-      .lean();
+    const [orders, lastInvoice] = await Promise.all([
+      Order.find(filter)
+        .sort({ date: 1, createdAt: 1 })
+        .select("_id customer_id customer_name date description lot_no machine_no quantity unit qt_pcs design_stitches rate total_amount")
+        .lean(),
+      Invoice.findOne(scope).sort({ invoice_date: -1, createdAt: -1 }).select("invoice_date").lean(),
+    ]);
 
     const grouped = new Map();
 
@@ -82,7 +100,13 @@ export const getInvoiceOrderGroups = async (req, res) => {
       return aTime - bTime;
     });
 
-    return res.json({ success: true, data });
+    return res.json({
+      success: true,
+      data,
+      meta: {
+        last_invoice_date: lastInvoice?.invoice_date ? toDateInput(lastInvoice.invoice_date) : "",
+      },
+    });
   } catch (err) {
     console.error("getInvoiceOrderGroups:", err);
     return res.status(500).json({ message: "Failed to fetch invoice order groups" });
@@ -150,6 +174,34 @@ export const createInvoice = async (req, res) => {
     }
     const customerPerson = customer?.person || "";
     const invoiceDateValue = invoice_date ? new Date(invoice_date) : new Date();
+    if (Number.isNaN(invoiceDateValue.getTime())) {
+      return res.status(400).json({ message: "Invalid invoice date" });
+    }
+
+    const invoiceDay = startOfDay(invoiceDateValue);
+    const todayDay = startOfDay(new Date());
+    if (invoiceDay > todayDay) {
+      return res.status(400).json({ message: "Invoice date cannot be after today" });
+    }
+
+    const lastInvoice = await Invoice.findOne(scope).sort({ invoice_date: -1, createdAt: -1 }).select("invoice_date").lean();
+    if (lastInvoice?.invoice_date) {
+      const lastInvoiceDay = startOfDay(lastInvoice.invoice_date);
+      if (invoiceDay < lastInvoiceDay) {
+        return res.status(400).json({ message: `Invoice date cannot be before last invoice date (${toDateInput(lastInvoice.invoice_date)})` });
+      }
+    }
+
+    const latestOrderDate = orders.reduce((latest, order) => {
+      const d = order?.date ? startOfDay(order.date) : null;
+      if (!d) return latest;
+      if (!latest || d > latest) return d;
+      return latest;
+    }, null);
+    if (latestOrderDate && invoiceDay < latestOrderDate) {
+      return res.status(400).json({ message: `Invoice date cannot be before selected order date (${toDateInput(latestOrderDate)})` });
+    }
+
     const invoiceYear = invoiceDateValue.getFullYear();
     const counter = await InvoiceCounter.findOneAndUpdate(
       { businessId: businessObjectId, year: invoiceYear },
