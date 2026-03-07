@@ -8,6 +8,13 @@ const parseOpeningBalance = (value) => {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
 };
+const normalizeAssignedExpenseItems = (value) => {
+  if (!Array.isArray(value)) return [];
+  const cleaned = value
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+  return Array.from(new Set(cleaned));
+};
 
 const buildBusinessFilter = (req, businessId) => {
   if (req.user?.role !== "developer") {
@@ -67,13 +74,14 @@ const attachSupplierCurrentBalance = async (suppliers, businessFilter = {}) => {
 
 export const createSupplier = async (req, res) => {
   try {
-    const { name, opening_balance } = req.body;
+    const { name, opening_balance, assigned_expense_items } = req.body;
 
     if (!name?.trim()) return res.status(400).json({ message: "Name is required" });
 
     const supplier = await Supplier.create({
       name: name.trim(),
       opening_balance: parseOpeningBalance(opening_balance),
+      assigned_expense_items: normalizeAssignedExpenseItems(assigned_expense_items),
       businessId: req.body.businessId,
     });
 
@@ -160,7 +168,7 @@ export const getSupplier = async (req, res) => {
 
 export const updateSupplier = async (req, res) => {
   try {
-    const { opening_balance } = req.body;
+    const { opening_balance, assigned_expense_items } = req.body;
     const filter = buildBusinessFilter(req, req.body.businessId);
 
     const supplier = await Supplier.findOne({ _id: req.params.id, ...filter });
@@ -168,6 +176,9 @@ export const updateSupplier = async (req, res) => {
 
     if (opening_balance !== undefined) {
       supplier.opening_balance = parseOpeningBalance(opening_balance);
+    }
+    if (assigned_expense_items !== undefined) {
+      supplier.assigned_expense_items = normalizeAssignedExpenseItems(assigned_expense_items);
     }
 
     await supplier.save();
@@ -180,7 +191,7 @@ export const updateSupplier = async (req, res) => {
 
 export const toggleSupplierStatus = async (req, res) => {
   try {
-    const filter = buildBusinessFilter(req, req.body.businessId || req.query.businessId);
+    const filter = buildBusinessFilter(req, req.body?.businessId || req.query?.businessId);
     const supplier = await Supplier.findOne({ _id: req.params.id, ...filter });
     if (!supplier) return res.status(404).json({ message: "Supplier not found" });
 

@@ -166,7 +166,38 @@ export const createExpense = async (req, res) => {
       return res.status(400).json({ message: "At least one valid expense item is required" });
     }
 
-    const created = await Expense.insertMany(docs);
+    const totalQuantity = docs.reduce((sum, row) => sum + toNum(row.quantity), 0);
+    const totalAmount = docs.reduce((sum, row) => sum + toNum(row.amount), 0);
+    const itemsCount = docs.length;
+    const firstItemName = normalizeText(docs[0]?.item_name || "");
+    const summaryTitle = itemsCount > 1 ? `${itemsCount} items` : firstItemName;
+    const avgRate = totalQuantity > 0 ? totalAmount / totalQuantity : totalAmount;
+
+    const created = await Expense.create({
+      expense_type,
+      fixed_source: fixedSource,
+      item_name: summaryTitle || "Expense",
+      quantity: totalQuantity,
+      rate: avgRate,
+      amount: totalAmount,
+      date: parsedDate,
+      month: normalizedMonth,
+      reference_no: normalizeText(reference_no),
+      remarks: normalizeText(remarks),
+      supplier_id: supplierObjectId,
+      supplier_name: supplierName,
+      group_key: groupKey,
+      items: docs.map((row) => ({
+        item_name: row.item_name,
+        quantity: row.quantity,
+        rate: row.rate,
+        amount: row.amount,
+      })),
+      items_count: itemsCount,
+      total_quantity: totalQuantity,
+      total_amount: totalAmount,
+      businessId,
+    });
     return res.status(201).json({ success: true, data: created });
   } catch (err) {
     console.error("createExpense:", err);
@@ -197,7 +228,8 @@ export const getExpenses = async (req, res) => {
 
     const searchableItemName = item_name || title;
     if (searchableItemName?.trim()) {
-      filter.item_name = { $regex: searchableItemName.trim(), $options: "i" };
+      const pattern = { $regex: searchableItemName.trim(), $options: "i" };
+      filter.$or = [{ item_name: pattern }, { "items.item_name": pattern }];
     }
 
     if (expense_type && EXPENSE_TYPES.has(expense_type)) {
@@ -231,7 +263,7 @@ export const getExpenses = async (req, res) => {
 
     const total = await Expense.countDocuments(filter);
     const data = await Expense.find(filter)
-      .sort({ date: -1, createdAt: -1 })
+      .sort({ createdAt: -1, date: -1 })
       .skip(skip)
       .limit(parsedLimit)
       .lean();
@@ -288,11 +320,127 @@ export const getExpenseStats = async (req, res) => {
 
 export const updateExpense = async (req, res) => {
   try {
-    const { item_name, quantity, rate, amount, date, reference_no, remarks } = req.body;
-    const businessFilter = buildBusinessFilter(req, req.body.businessId || req.query.businessId);
+    const {
+      expense_type,
+      fixed_source,
+      supplier_id,
+      items,
+      item_name,
+      quantity,
+      rate,
+      amount,
+      date,
+      month,
+      reference_no,
+      remarks,
+    } = req.body;
+    const businessFilter = buildBusinessFilter(req, req.body?.businessId || req.query?.businessId);
 
     const expense = await Expense.findOne({ _id: req.params.id, ...businessFilter });
     if (!expense) return res.status(404).json({ message: "Expense not found" });
+
+    if (Array.isArray(items)) {
+      const nextExpenseType = expense_type !== undefined ? expense_type : expense.expense_type;
+      if (!EXPENSE_TYPES.has(nextExpenseType)) {
+        return res.status(400).json({ message: "Invalid expense type" });
+      }
+
+      const normalizedItems = items
+        .map((row) => ({
+          item_name: normalizeText(row?.item_name),
+          quantity: toNum(row?.quantity),
+          rate: toNum(row?.rate),
+          amount: toNum(row?.amount),
+        }))
+        .filter((row) => row.item_name && ((row.quantity > 0 && row.rate > 0) || row.amount > 0));
+
+      if (normalizedItems.length === 0) {
+        return res.status(400).json({ message: "At least one valid expense item is required" });
+      }
+
+      let nextFixedSource = "";
+      if (nextExpenseType === "fixed") {
+        nextFixedSource = fixed_source !== undefined ? fixed_source : expense.fixed_source || "cash";
+        if (!FIXED_SOURCES.has(nextFixedSource)) {
+          return res.status(400).json({ message: "Fixed source must be cash or supplier" });
+        }
+      }
+
+      let supplierObjectId = null;
+      let supplierName = "";
+      const requiresSupplier =
+        nextExpenseType === "supplier" ||
+        (nextExpenseType === "fixed" && nextFixedSource === "supplier");
+
+      if (requiresSupplier) {
+        const nextSupplierId = supplier_id || expense.supplier_id;
+        if (!nextSupplierId || !mongoose.Types.ObjectId.isValid(nextSupplierId)) {
+          return res.status(400).json({ message: "Valid supplier is required" });
+        }
+        const supplier = await Supplier.findOne({ _id: nextSupplierId, ...businessFilter })
+          .select("_id name")
+          .lean();
+        if (!supplier) return res.status(404).json({ message: "Supplier not found" });
+        supplierObjectId = supplier._id;
+        supplierName = supplier.name;
+      }
+
+      let nextMonth = normalizeMonth(month || expense.month || "");
+      let nextDate = expense.date;
+
+      if (nextExpenseType === "fixed") {
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(nextMonth)) {
+          return res.status(400).json({ message: "Month must be in YYYY-MM format" });
+        }
+        nextDate = parseDate(date || `${nextMonth}-01`, nextMonth);
+      } else {
+        nextDate = parseDate(date || expense.date, null);
+        const monthSource = nextDate || parseDate(expense.date, null) || new Date();
+        nextMonth = monthSource.toISOString().slice(0, 7);
+      }
+
+      if (!nextDate) return res.status(400).json({ message: "Valid date/month is required" });
+
+      const docs = normalizedItems.map((row) => {
+        const derivedAmount = row.quantity > 0 && row.rate > 0 ? row.quantity * row.rate : row.amount;
+        return {
+          item_name: row.item_name,
+          quantity: row.quantity,
+          rate: row.rate,
+          amount: derivedAmount > 0 ? derivedAmount : row.amount,
+        };
+      }).filter((row) => row.amount > 0);
+
+      if (docs.length === 0) {
+        return res.status(400).json({ message: "At least one valid expense item is required" });
+      }
+
+      const totalQuantity = docs.reduce((sum, row) => sum + toNum(row.quantity), 0);
+      const totalAmount = docs.reduce((sum, row) => sum + toNum(row.amount), 0);
+      const itemsCount = docs.length;
+      const summaryTitle = itemsCount > 1 ? `${itemsCount} items` : docs[0]?.item_name || "Expense";
+      const avgRate = totalQuantity > 0 ? totalAmount / totalQuantity : totalAmount;
+
+      expense.expense_type = nextExpenseType;
+      expense.fixed_source = nextExpenseType === "fixed" ? nextFixedSource : "";
+      expense.supplier_id = supplierObjectId;
+      expense.supplier_name = supplierName;
+      expense.date = nextDate;
+      expense.month = nextMonth;
+      expense.reference_no = reference_no !== undefined ? normalizeText(reference_no) : expense.reference_no;
+      expense.remarks = remarks !== undefined ? normalizeText(remarks) : expense.remarks;
+      expense.items = docs;
+      expense.items_count = itemsCount;
+      expense.total_quantity = totalQuantity;
+      expense.total_amount = totalAmount;
+      expense.item_name = summaryTitle;
+      expense.quantity = totalQuantity;
+      expense.rate = avgRate;
+      expense.amount = totalAmount;
+
+      await expense.save();
+      return res.json({ success: true, data: expense });
+    }
 
     if (item_name !== undefined) {
       const val = normalizeText(item_name);
@@ -344,7 +492,7 @@ export const updateExpense = async (req, res) => {
 
 export const deleteExpense = async (req, res) => {
   try {
-    const businessFilter = buildBusinessFilter(req, req.body.businessId || req.query.businessId);
+    const businessFilter = buildBusinessFilter(req, req.body?.businessId || req.query?.businessId);
     const expense = await Expense.findOneAndDelete({ _id: req.params.id, ...businessFilter });
     if (!expense) return res.status(404).json({ message: "Expense not found" });
     return res.json({ success: true, id: expense._id });

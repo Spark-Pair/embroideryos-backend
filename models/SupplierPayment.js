@@ -18,7 +18,7 @@ const supplierPaymentSchema = new mongoose.Schema(
     },
     method: {
       type: String,
-      enum: ["cash", "cheque", "online"],
+      enum: ["cash", "cheque", "online", "goods_return"],
       required: true,
       index: true,
     },

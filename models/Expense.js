@@ -33,6 +33,20 @@ const expenseSchema = new mongoose.Schema(
       index: true,
     },
     supplier_name: { type: String, default: "", trim: true },
+    items: {
+      type: [
+        {
+          item_name: { type: String, trim: true, default: "" },
+          quantity: { type: Number, default: 0, min: 0 },
+          rate: { type: Number, default: 0, min: 0 },
+          amount: { type: Number, default: 0, min: 0 },
+        },
+      ],
+      default: [],
+    },
+    items_count: { type: Number, default: 1, min: 1 },
+    total_quantity: { type: Number, default: 0, min: 0 },
+    total_amount: { type: Number, default: 0, min: 0 },
     group_key: { type: String, default: "", index: true },
     businessId: {
       type: mongoose.Schema.Types.ObjectId,

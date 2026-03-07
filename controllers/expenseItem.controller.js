@@ -125,7 +125,7 @@ export const updateExpenseItem = async (req, res) => {
       default_amount,
     } = req.body;
 
-    const businessFilter = buildBusinessFilter(req, req.body.businessId || req.query.businessId);
+    const businessFilter = buildBusinessFilter(req, req.body?.businessId || req.query?.businessId);
     const item = await ExpenseItem.findOne({ _id: req.params.id, ...businessFilter });
     if (!item) return res.status(404).json({ message: "Expense item not found" });
 
@@ -200,7 +200,7 @@ export const updateExpenseItem = async (req, res) => {
 
 export const toggleExpenseItemStatus = async (req, res) => {
   try {
-    const businessFilter = buildBusinessFilter(req, req.body.businessId || req.query.businessId);
+    const businessFilter = buildBusinessFilter(req, req.body?.businessId || req.query?.businessId);
     const item = await ExpenseItem.findOne({ _id: req.params.id, ...businessFilter });
     if (!item) return res.status(404).json({ message: "Expense item not found" });
 

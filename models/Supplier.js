@@ -4,6 +4,10 @@ const supplierSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
     opening_balance: { type: Number, default: 0 },
+    assigned_expense_items: {
+      type: [String],
+      default: [],
+    },
     isActive: { type: Boolean, default: true },
     businessId: {
       type: mongoose.Schema.Types.ObjectId,

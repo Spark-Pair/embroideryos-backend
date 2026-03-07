@@ -3,7 +3,7 @@ import Supplier from "../models/Supplier.js";
 import SupplierPayment from "../models/SupplierPayment.js";
 import Expense from "../models/Expense.js";
 
-const PAYMENT_METHODS = new Set(["cash", "cheque", "online"]);
+const PAYMENT_METHODS = new Set(["cash", "cheque", "online", "goods_return"]);
 
 const normalizeMonth = (month) => (typeof month === "string" ? month.trim() : "");
 const normalizeText = (val) => (typeof val === "string" ? val.trim() : "");
@@ -162,6 +162,7 @@ export const getSupplierPaymentStats = async (req, res) => {
           cash: { $sum: { $cond: [{ $eq: ["$method", "cash"] }, 1, 0] } },
           cheque: { $sum: { $cond: [{ $eq: ["$method", "cheque"] }, 1, 0] } },
           online: { $sum: { $cond: [{ $eq: ["$method", "online"] }, 1, 0] } },
+          goods_return: { $sum: { $cond: [{ $eq: ["$method", "goods_return"] }, 1, 0] } },
           total_amount: { $sum: "$amount" },
         },
       },
@@ -175,6 +176,7 @@ export const getSupplierPaymentStats = async (req, res) => {
           cash: 0,
           cheque: 0,
           online: 0,
+          goods_return: 0,
           total_amount: 0,
         },
     });
