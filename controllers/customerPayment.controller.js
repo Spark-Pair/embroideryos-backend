@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import CustomerPayment from "../models/CustomerPayment.js";
 import Customer from "../models/Customer.js";
 import Invoice from "../models/Invoice.js";
+import Order from "../models/Order.js";
 
 const PAYMENT_METHODS = new Set(["cash", "cheque", "slip", "online", "adjustment"]);
 
@@ -433,17 +434,7 @@ export const getCustomerStatement = async (req, res) => {
       return res.status(404).json({ message: "Customer not found" });
     }
 
-    const [priorInvoiceAgg, priorPaymentAgg, invoices, payments] = await Promise.all([
-      Invoice.aggregate([
-        {
-          $match: {
-            ...businessFilter,
-            customer_id: customerObjectId,
-            invoice_date: { $lt: startDate },
-          },
-        },
-        { $group: { _id: null, total: { $sum: "$total_amount" } } },
-      ]),
+    const [priorPaymentAgg, invoicesBefore, invoicesInRange, payments] = await Promise.all([
       CustomerPayment.aggregate([
         {
           $match: {
@@ -457,10 +448,17 @@ export const getCustomerStatement = async (req, res) => {
       Invoice.find({
         ...businessFilter,
         customer_id: customerObjectId,
+        invoice_date: { $lt: startDate },
+      })
+        .select("_id invoice_number invoice_date")
+        .lean(),
+      Invoice.find({
+        ...businessFilter,
+        customer_id: customerObjectId,
         invoice_date: { $gte: startDate, $lte: endDate },
       })
         .sort({ invoice_date: 1, createdAt: 1, _id: 1 })
-        .select("_id invoice_number invoice_date total_amount note order_count createdAt")
+        .select("_id invoice_number invoice_date")
         .lean(),
       CustomerPayment.find({
         ...businessFilter,
@@ -472,22 +470,78 @@ export const getCustomerStatement = async (req, res) => {
         .lean(),
     ]);
 
+    const priorInvoiceIds = invoicesBefore.map((inv) => inv._id);
+    const inRangeInvoiceIds = invoicesInRange.map((inv) => inv._id);
+
+    const [priorOrdersAgg, ordersInRange] = await Promise.all([
+      priorInvoiceIds.length
+        ? Order.aggregate([
+            {
+              $match: {
+                ...businessFilter,
+                customer_id: customerObjectId,
+                invoice_id: { $in: priorInvoiceIds },
+              },
+            },
+            { $group: { _id: null, total: { $sum: "$total_amount" } } },
+          ])
+        : Promise.resolve([]),
+      inRangeInvoiceIds.length
+        ? Order.find({
+            ...businessFilter,
+            customer_id: customerObjectId,
+            invoice_id: { $in: inRangeInvoiceIds },
+          })
+            .sort({ date: 1, createdAt: 1, _id: 1 })
+            .select(
+              "_id date description machine_no lot_no client_ref unit quantity qt_pcs actual_stitches design_stitches apq apq_chr reverse_mode two_side rate stitch_rate total_amount invoice_id createdAt"
+            )
+            .lean()
+        : Promise.resolve([]),
+    ]);
+
+    const invoiceMap = new Map(
+      invoicesInRange.map((inv) => [
+        String(inv._id),
+        { invoice_date: inv.invoice_date, invoice_number: inv.invoice_number || "" },
+      ])
+    );
+
     const openingBalance =
       Number(customer?.opening_balance || 0) +
-      Number(priorInvoiceAgg?.[0]?.total || 0) -
+      Number(priorOrdersAgg?.[0]?.total || 0) -
       Number(priorPaymentAgg?.[0]?.total || 0);
 
     const rows = [
-      ...invoices.map((inv) => ({
-        kind: "invoice",
-        _id: inv._id,
-        date: inv.invoice_date,
-        invoice_number: inv.invoice_number || "",
-        details: inv.note || "",
-        debit: Number(inv.total_amount || 0),
-        credit: 0,
-        createdAt: inv.createdAt,
-      })),
+      ...ordersInRange.map((order) => {
+        const invoiceMeta = invoiceMap.get(String(order?.invoice_id || "")) || {};
+        return {
+          kind: "order",
+          _id: order._id,
+          date: invoiceMeta.invoice_date || order.date,
+          invoice_date: invoiceMeta.invoice_date || null,
+          order_date: order.date || null,
+          invoice_number: invoiceMeta.invoice_number || "",
+          description: order.description || "",
+          machine_no: order.machine_no || "",
+          lot_no: order.lot_no || "",
+          client_ref: order.client_ref || "",
+          unit: order.unit || "",
+          quantity: Number(order.quantity || 0),
+          qt_pcs: Number(order.qt_pcs || 0),
+          actual_stitches: Number(order.actual_stitches || 0),
+          design_stitches: Number(order.design_stitches || 0),
+          apq: Number(order.apq || 0),
+          apq_chr: Number(order.apq_chr || 0),
+          reverse_mode: Boolean(order.reverse_mode),
+          two_side: Boolean(order.two_side),
+          rate: Number(order.rate || 0),
+          stitch_rate: Number(order.stitch_rate || 0),
+          debit: Number(order.total_amount || 0),
+          credit: 0,
+          createdAt: order.createdAt,
+        };
+      }),
       ...payments.map((p) => ({
         kind: "payment",
         _id: p._id,
