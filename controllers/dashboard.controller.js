@@ -151,7 +151,7 @@ const parseDateInput = (value) => {
 const isAllowanceEligible = ({ recordCount, absentCount, halfCount }) =>
   recordCount >= 26 && absentCount === 0 && halfCount <= 1;
 
-const calculateCustomerMonthlySummary = async ({ businessMatch, selectedRange }) => {
+const calculateCustomerMonthlySummary = async ({ businessMatch, selectedMonth, selectedRange }) => {
   const customers = await Customer.find(businessMatch)
     .select("_id name opening_balance isActive")
     .lean();
@@ -163,7 +163,7 @@ const calculateCustomerMonthlySummary = async ({ businessMatch, selectedRange })
       customer_with_activity: 0,
       billed_amount: 0,
       received_amount: 0,
-      opening_amount: 0,
+      arrears_amount: 0,
       balance_amount: 0,
       by_customer: [],
     };
@@ -175,16 +175,16 @@ const calculateCustomerMonthlySummary = async ({ businessMatch, selectedRange })
     Invoice.find({
       ...businessMatch,
       customer_id: { $in: customerIds },
-      invoice_date: { $gte: selectedRange.from, $lte: selectedRange.to },
+      invoice_date: { $lte: selectedRange.to },
     })
-      .select("customer_id total_amount")
+      .select("customer_id total_amount invoice_date")
       .lean(),
     CustomerPayment.find({
       ...businessMatch,
       customer_id: { $in: customerIds },
-      date: { $gte: selectedRange.from, $lte: selectedRange.to },
+      date: { $lte: selectedRange.to },
     })
-      .select("customer_id amount")
+      .select("customer_id amount date")
       .lean(),
   ]);
 
@@ -196,6 +196,7 @@ const calculateCustomerMonthlySummary = async ({ businessMatch, selectedRange })
         customer_name: row?.name || "",
         is_active: Boolean(row?.isActive),
         opening_amount: Number(row?.opening_balance || 0),
+        arrears_amount: Number(row?.opening_balance || 0),
         billed_amount: 0,
         received_amount: 0,
       },
@@ -206,6 +207,13 @@ const calculateCustomerMonthlySummary = async ({ businessMatch, selectedRange })
     const id = String(row?.customer_id || "");
     const current = byCustomer.get(id);
     if (!current) return;
+    const monthKey = getMonthKeyFromDate(row?.invoice_date);
+    if (!monthKey) return;
+    if (monthKey < selectedMonth) {
+      current.arrears_amount += Number(row?.total_amount || 0);
+      return;
+    }
+    if (monthKey !== selectedMonth) return;
     current.billed_amount += Number(row?.total_amount || 0);
   });
 
@@ -213,6 +221,13 @@ const calculateCustomerMonthlySummary = async ({ businessMatch, selectedRange })
     const id = String(row?.customer_id || "");
     const current = byCustomer.get(id);
     if (!current) return;
+    const monthKey = getMonthKeyFromDate(row?.date);
+    if (!monthKey) return;
+    if (monthKey < selectedMonth) {
+      current.arrears_amount -= Number(row?.amount || 0);
+      return;
+    }
+    if (monthKey !== selectedMonth) return;
     current.received_amount += Number(row?.amount || 0);
   });
 
@@ -222,26 +237,28 @@ const calculateCustomerMonthlySummary = async ({ businessMatch, selectedRange })
     customer_with_activity: 0,
     billed_amount: 0,
     received_amount: 0,
-    opening_amount: 0,
+    arrears_amount: 0,
     balance_amount: 0,
     by_customer: [],
   };
 
   byCustomer.forEach((row) => {
-    const balanceAmount = row.opening_amount + row.billed_amount - row.received_amount;
+    const historyBalance = row.arrears_amount;
+    const effectiveArrears = historyBalance === 0 ? row.opening_amount : historyBalance;
+    const balanceAmount = effectiveArrears + row.billed_amount - row.received_amount;
     if (row.billed_amount > 0 || row.received_amount > 0) {
       total.customer_with_activity += 1;
     }
 
     total.billed_amount += row.billed_amount;
     total.received_amount += row.received_amount;
-    total.opening_amount += row.opening_amount;
+    total.arrears_amount += effectiveArrears;
     total.balance_amount += balanceAmount;
     total.by_customer.push({
       customer_id: row.customer_id,
       customer_name: row.customer_name,
       is_active: row.is_active,
-      opening_amount: row.opening_amount,
+      arrears_amount: effectiveArrears,
       billed_amount: row.billed_amount,
       received_amount: row.received_amount,
       balance_amount: balanceAmount,
@@ -252,7 +269,7 @@ const calculateCustomerMonthlySummary = async ({ businessMatch, selectedRange })
   return total;
 };
 
-const calculateSupplierMonthlySummary = async ({ businessMatch, selectedRange }) => {
+const calculateSupplierMonthlySummary = async ({ businessMatch, selectedMonth, selectedRange }) => {
   const suppliers = await Supplier.find(businessMatch)
     .select("_id name opening_balance isActive")
     .lean();
@@ -264,7 +281,7 @@ const calculateSupplierMonthlySummary = async ({ businessMatch, selectedRange })
       supplier_with_activity: 0,
       expense_amount: 0,
       paid_amount: 0,
-      opening_amount: 0,
+      arrears_amount: 0,
       balance_amount: 0,
       by_supplier: [],
     };
@@ -275,16 +292,16 @@ const calculateSupplierMonthlySummary = async ({ businessMatch, selectedRange })
     Expense.find({
       ...businessMatch,
       supplier_id: { $in: supplierIds },
-      date: { $gte: selectedRange.from, $lte: selectedRange.to },
+      date: { $lte: selectedRange.to },
     })
-      .select("supplier_id amount")
+      .select("supplier_id amount date")
       .lean(),
     SupplierPayment.find({
       ...businessMatch,
       supplier_id: { $in: supplierIds },
-      date: { $gte: selectedRange.from, $lte: selectedRange.to },
+      date: { $lte: selectedRange.to },
     })
-      .select("supplier_id amount")
+      .select("supplier_id amount date")
       .lean(),
   ]);
 
@@ -296,6 +313,7 @@ const calculateSupplierMonthlySummary = async ({ businessMatch, selectedRange })
         supplier_name: row?.name || "",
         is_active: Boolean(row?.isActive),
         opening_amount: Number(row?.opening_balance || 0),
+        arrears_amount: Number(row?.opening_balance || 0),
         expense_amount: 0,
         paid_amount: 0,
       },
@@ -306,6 +324,13 @@ const calculateSupplierMonthlySummary = async ({ businessMatch, selectedRange })
     const id = String(row?.supplier_id || "");
     const current = bySupplier.get(id);
     if (!current) return;
+    const monthKey = getMonthKeyFromDate(row?.date);
+    if (!monthKey) return;
+    if (monthKey < selectedMonth) {
+      current.arrears_amount += Number(row?.amount || 0);
+      return;
+    }
+    if (monthKey !== selectedMonth) return;
     current.expense_amount += Number(row?.amount || 0);
   });
 
@@ -313,6 +338,13 @@ const calculateSupplierMonthlySummary = async ({ businessMatch, selectedRange })
     const id = String(row?.supplier_id || "");
     const current = bySupplier.get(id);
     if (!current) return;
+    const monthKey = getMonthKeyFromDate(row?.date);
+    if (!monthKey) return;
+    if (monthKey < selectedMonth) {
+      current.arrears_amount -= Number(row?.amount || 0);
+      return;
+    }
+    if (monthKey !== selectedMonth) return;
     current.paid_amount += Number(row?.amount || 0);
   });
 
@@ -322,26 +354,28 @@ const calculateSupplierMonthlySummary = async ({ businessMatch, selectedRange })
     supplier_with_activity: 0,
     expense_amount: 0,
     paid_amount: 0,
-    opening_amount: 0,
+    arrears_amount: 0,
     balance_amount: 0,
     by_supplier: [],
   };
 
   bySupplier.forEach((row) => {
-    const balanceAmount = row.opening_amount + row.expense_amount - row.paid_amount;
+    const historyBalance = row.arrears_amount;
+    const effectiveArrears = historyBalance === 0 ? row.opening_amount : historyBalance;
+    const balanceAmount = effectiveArrears + row.expense_amount - row.paid_amount;
     if (row.expense_amount > 0 || row.paid_amount > 0) {
       total.supplier_with_activity += 1;
     }
 
     total.expense_amount += row.expense_amount;
     total.paid_amount += row.paid_amount;
-    total.opening_amount += row.opening_amount;
+    total.arrears_amount += effectiveArrears;
     total.balance_amount += balanceAmount;
     total.by_supplier.push({
       supplier_id: row.supplier_id,
       supplier_name: row.supplier_name,
       is_active: row.is_active,
-      opening_amount: row.opening_amount,
+      arrears_amount: effectiveArrears,
       expense_amount: row.expense_amount,
       paid_amount: row.paid_amount,
       balance_amount: balanceAmount,
@@ -818,10 +852,12 @@ export const getDashboardSummary = async (req, res) => {
       }),
       calculateCustomerMonthlySummary({
         businessMatch,
+        selectedMonth,
         selectedRange,
       }),
       calculateSupplierMonthlySummary({
         businessMatch,
+        selectedMonth,
         selectedRange,
       }),
       calculateCrpStaffMonthlySummary({
