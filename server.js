@@ -48,7 +48,7 @@ import subscriptionPaymentRoutes from "./routes/subscriptionPayment.routes.js";
 app.use('/api/auth', authRoutes); // login, logout, register
 
 app.use('/api/businesses', authMiddleware, businessRoutes);
-app.use('/api/users', authMiddleware, allowedRoles(['developer']), userRoutes);
+app.use('/api/users', authMiddleware, userRoutes);
 app.use('/api/customers', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), customerRoutes);
 app.use('/api/suppliers', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), supplierRoutes);
 app.use('/api/staffs', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff']), staffRoutes);

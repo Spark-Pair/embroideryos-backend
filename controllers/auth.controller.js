@@ -4,6 +4,7 @@ import Session from '../models/Session.js';
 import Subscription from '../models/Subscription.js';
 import SessionService from '../services/SessionService.js';
 import jwt from 'jsonwebtoken';
+import { getPlanById } from "../services/plan.service.js";
 
 const ALLOWED_SHORTCUT_ACTIONS = [
   'page_header_primary_action',
@@ -59,6 +60,37 @@ const sanitizeShortcuts = (input) => {
 };
 
 const toShortcutObject = (value) => Object.fromEntries(value || []);
+
+const resolvePlanForBusiness = async (businessId) => {
+  if (!businessId) return null;
+  const subscription = await Subscription.findOne({ businessId }).lean();
+  const planId = subscription?.plan || "trial";
+  return getPlanById(planId);
+};
+
+const enforceUserLimit = async (user) => {
+  if (!user || user.role === "developer" || !user.businessId) return null;
+  const plan = await resolvePlanForBusiness(user.businessId);
+  const limit = Number(plan?.limits?.users ?? 1);
+  if (!Number.isFinite(limit) || limit > 1) return null;
+
+  const primary = await User.findOne({
+    businessId: user.businessId,
+    role: { $ne: "developer" },
+  })
+    .sort({ createdAt: 1 })
+    .select("_id")
+    .lean();
+
+  if (primary && String(primary._id) !== String(user._id)) {
+    return {
+      message: "Plan allows only one user. Please use the primary account.",
+      code: "USER_LIMIT_PRIMARY_ONLY",
+    };
+  }
+
+  return null;
+};
 
 /* LOGIN */
 export const login = async (req, res) => {
@@ -117,6 +149,11 @@ export const login = async (req, res) => {
       resolvedShortcuts = Object.keys(businessShortcuts).length > 0
         ? businessShortcuts
         : resolvedShortcuts;
+    }
+
+    const limitError = await enforceUserLimit(user);
+    if (limitError) {
+      return res.status(403).json(limitError);
     }
 
     // Create session
@@ -191,6 +228,11 @@ export const forceLogin = async (req, res) => {
       resolvedShortcuts = Object.keys(businessShortcuts).length > 0
         ? businessShortcuts
         : resolvedShortcuts;
+    }
+
+    const limitError = await enforceUserLimit(user);
+    if (limitError) {
+      return res.status(403).json(limitError);
     }
 
     // Create new session
