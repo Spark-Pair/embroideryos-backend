@@ -95,6 +95,29 @@ const aggregateCountAndAmount = async (Model, dateField, amountField, baseMatch,
   };
 };
 
+const aggregateCountAndAmountByMonth = async (Model, monthField, amountField, baseMatch, monthValue) => {
+  const [res] = await Model.aggregate([
+    {
+      $match: {
+        ...baseMatch,
+        [monthField]: monthValue,
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        count: { $sum: 1 },
+        amount: { $sum: `$${amountField}` },
+      },
+    },
+  ]);
+
+  return {
+    count: Number(res?.count || 0),
+    amount: Number(res?.amount || 0),
+  };
+};
+
 const aggregateTrendByDay = async (Model, dateField, amountField, baseMatch, from, to, asCount = false) => {
   const [rows] = await Promise.all([
     Model.aggregate([
@@ -386,7 +409,8 @@ const calculateSupplierMonthlySummary = async ({ businessMatch, selectedMonth, s
   return total;
 };
 
-const calculateCrpStaffMonthlySummary = async ({ businessMatch, selectedRange }) => {
+const calculateCrpStaffMonthlySummary = async ({ businessMatch, selectedMonth }) => {
+  const prevMonthKey = previousMonth(selectedMonth);
   const crpStaff = await Staff.find({
     ...businessMatch,
     category: "Cropping",
@@ -413,16 +437,16 @@ const calculateCrpStaffMonthlySummary = async ({ businessMatch, selectedRange })
     CrpStaffRecord.find({
       ...businessMatch,
       staff_id: { $in: staffIds },
-      order_date: { $gte: selectedRange.from, $lte: selectedRange.to },
+      month: { $lte: selectedMonth },
     })
-      .select("staff_id total_amount")
+      .select("staff_id total_amount month")
       .lean(),
     StaffPayment.find({
       ...businessMatch,
       staff_id: { $in: staffIds },
-      date: { $gte: selectedRange.from, $lte: selectedRange.to },
+      month: { $lte: selectedMonth },
     })
-      .select("staff_id amount")
+      .select("staff_id amount month")
       .lean(),
   ]);
 
@@ -441,18 +465,53 @@ const calculateCrpStaffMonthlySummary = async ({ businessMatch, selectedRange })
     ])
   );
 
+  const historyTotals = new Map();
+
   records.forEach((row) => {
     const id = String(row?.staff_id || "");
     const current = byStaff.get(id);
     if (!current) return;
+    const recordMonth = typeof row?.month === "string" && row.month ? row.month : "";
+    if (!recordMonth) return;
+
+    if (recordMonth < selectedMonth) {
+      const historyKey = `${id}::${recordMonth}`;
+      const prev = historyTotals.get(historyKey) || {
+        staffId: id,
+        monthKey: recordMonth,
+        totalAmount: 0,
+      };
+      prev.totalAmount += Number(row?.total_amount || 0);
+      historyTotals.set(historyKey, prev);
+      return;
+    }
+
+    if (recordMonth !== selectedMonth) return;
     current.record_count += 1;
     current.work_amount += Number(row?.total_amount || 0);
   });
+
+  [...historyTotals.values()]
+    .sort((a, b) => (a.monthKey === b.monthKey ? a.staffId.localeCompare(b.staffId) : a.monthKey.localeCompare(b.monthKey)))
+    .forEach((row) => {
+      const current = byStaff.get(row.staffId);
+      if (!current) return;
+      current.arrears_amount += Number(row.totalAmount || 0);
+    });
 
   payments.forEach((row) => {
     const id = String(row?.staff_id || "");
     const current = byStaff.get(id);
     if (!current) return;
+    const paymentMonth = typeof row?.month === "string" && row.month ? row.month : "";
+    if (!paymentMonth) return;
+
+    if (paymentMonth <= prevMonthKey) {
+      current.arrears_amount -= Number(row?.amount || 0);
+      return;
+    }
+
+    if (paymentMonth !== selectedMonth) return;
     current.deduction_amount += Number(row?.amount || 0);
   });
 
@@ -496,7 +555,6 @@ const calculateCrpStaffMonthlySummary = async ({ businessMatch, selectedRange })
 
 const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, selectedRange }) => {
   const prevMonthKey = previousMonth(selectedMonth);
-  const prevMonthEnd = monthRange(prevMonthKey).to;
 
   const staffs = await Staff.find({
     ...businessMatch,
@@ -538,7 +596,7 @@ const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, sele
     StaffPayment.find({
       ...businessMatch,
       staff_id: { $in: staffIds },
-      date: { $lte: selectedRange.to },
+      month: { $lte: selectedMonth },
     })
       .select("staff_id date month type amount")
       .lean(),
@@ -634,14 +692,9 @@ const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, sele
     if (!current) return;
 
     const amount = Number(payment?.amount || 0);
-    const paymentMonth = typeof payment?.month === "string" && payment.month
-      ? payment.month
-      : getMonthKeyFromDate(payment?.date);
-    const paymentDate = payment?.date ? new Date(payment.date) : null;
-
-    const isHistoryPayment = paymentMonth
-      ? paymentMonth <= prevMonthKey
-      : Boolean(paymentDate && paymentDate <= prevMonthEnd);
+    const paymentMonth = typeof payment?.month === "string" && payment.month ? payment.month : "";
+    if (!paymentMonth) return;
+    const isHistoryPayment = paymentMonth <= prevMonthKey;
 
     if (isHistoryPayment) {
       current.arrears -= amount;
@@ -827,9 +880,9 @@ export const getDashboardSummary = async (req, res) => {
       aggregateCountAndAmount(Expense, "date", "amount", businessMatch, selectedRange.from, selectedRange.to),
       aggregateCountAndAmount(CustomerPayment, "date", "amount", businessMatch, selectedRange.from, selectedRange.to),
       aggregateCountAndAmount(SupplierPayment, "date", "amount", businessMatch, selectedRange.from, selectedRange.to),
-      aggregateCountAndAmount(StaffPayment, "date", "amount", businessMatch, selectedRange.from, selectedRange.to),
+      aggregateCountAndAmountByMonth(StaffPayment, "month", "amount", businessMatch, selectedMonth),
       aggregateCountAndAmount(StaffRecord, "date", "final_amount", businessMatch, selectedRange.from, selectedRange.to),
-      aggregateCountAndAmount(CrpStaffRecord, "order_date", "total_amount", businessMatch, selectedRange.from, selectedRange.to),
+      aggregateCountAndAmountByMonth(CrpStaffRecord, "month", "total_amount", businessMatch, selectedMonth),
 
       Customer.countDocuments({ ...businessMatch, isActive: true }),
       Supplier.countDocuments({ ...businessMatch, isActive: true }),
@@ -862,7 +915,7 @@ export const getDashboardSummary = async (req, res) => {
       }),
       calculateCrpStaffMonthlySummary({
         businessMatch,
-        selectedRange,
+        selectedMonth,
       }),
     ]);
 
