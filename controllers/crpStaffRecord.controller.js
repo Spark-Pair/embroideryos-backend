@@ -126,6 +126,116 @@ export const createCrpStaffRecord = async (req, res) => {
   }
 };
 
+export const updateCrpStaffRecord = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      order_id,
+      order_date,
+      order_description,
+      staff_id,
+      type_name,
+      rate,
+      quantity_dzn,
+    } = req.body;
+    const category = normalizeCategory(req.body.category);
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid record id" });
+    }
+
+    const businessFilter = buildBusinessFilter(req, req.body.businessId);
+    const businessId = businessFilter.businessId || req.body.businessId;
+    if (!businessId) return res.status(400).json({ message: "businessId is required" });
+
+    const existing = await CrpStaffRecord.findOne({ _id: id, ...businessFilter });
+    if (!existing) return res.status(404).json({ message: "CRP record not found" });
+
+    const nextCategory = category || existing.category;
+    const nextTypeName = (type_name || existing.type_name || "").trim();
+
+    if (!CATEGORIES.has(nextCategory)) {
+      return res.status(400).json({ message: "Invalid category" });
+    }
+    if (!nextTypeName) {
+      return res.status(400).json({ message: "Type is required" });
+    }
+
+    const nextStaffId = staff_id || existing.staff_id;
+    if (!nextStaffId || !mongoose.Types.ObjectId.isValid(nextStaffId)) {
+      return res.status(400).json({ message: "Valid staff is required" });
+    }
+
+    const shouldResolveOrder = Boolean(order_id && mongoose.Types.ObjectId.isValid(order_id));
+    const resolvedOrderId = shouldResolveOrder ? order_id : existing.order_id;
+
+    const [order, staff, rateConfig] = await Promise.all([
+      resolvedOrderId ? Order.findOne({ _id: resolvedOrderId, ...businessFilter }).lean() : Promise.resolve(null),
+      Staff.findOne({ _id: nextStaffId, ...businessFilter }).select("_id name category").lean(),
+      CrpRateConfig.findOne({
+        category: nextCategory,
+        type_name: nextTypeName,
+        isActive: true,
+        ...businessFilter,
+      }).lean(),
+    ]);
+
+    if (resolvedOrderId && !order) return res.status(404).json({ message: "Order not found" });
+    if (!staff) return res.status(404).json({ message: "Staff not found" });
+    if (staff.category !== "Cropping") {
+      return res.status(400).json({ message: "Selected staff is not in Cropping category" });
+    }
+    if (!rateConfig) {
+      return res.status(404).json({ message: "CRP category/type config not found or inactive" });
+    }
+
+    const resolvedDateRaw = order?.date || order_date || existing.order_date;
+    const resolvedDate = resolvedDateRaw ? new Date(resolvedDateRaw) : null;
+    if (!resolvedDate || Number.isNaN(resolvedDate.getTime())) {
+      return res.status(400).json({ message: "Valid order date is required" });
+    }
+
+    const orderQtyDzn = order
+      ? (order.unit === "Pcs" ? toNum(order.quantity) / 12 : toNum(order.quantity))
+      : 0;
+
+    const resolvedQtyDzn = quantity_dzn === undefined || quantity_dzn === null || quantity_dzn === ""
+      ? (order ? orderQtyDzn : toNum(existing.quantity_dzn))
+      : toNum(quantity_dzn);
+
+    if (resolvedQtyDzn <= 0) {
+      return res.status(400).json({ message: "Quantity in dozen must be greater than 0" });
+    }
+
+    const resolvedRate = toNum(rate || rateConfig.rate || existing.rate);
+    if (resolvedRate <= 0) {
+      return res.status(400).json({ message: "Rate must be greater than 0" });
+    }
+
+    const totalAmount = resolvedQtyDzn * resolvedRate;
+    const month = resolvedDate.toISOString().slice(0, 7);
+
+    existing.order_id = order?._id || null;
+    existing.order_date = resolvedDate;
+    existing.order_description = (order_description ?? order?.description ?? existing.order_description ?? "").trim();
+    existing.quantity_dzn = resolvedQtyDzn;
+    existing.staff_id = staff._id;
+    existing.staff_name = staff.name;
+    existing.category = nextCategory;
+    existing.type_name = nextTypeName;
+    existing.rate = resolvedRate;
+    existing.total_amount = totalAmount;
+    existing.month = month;
+
+    await existing.save();
+
+    return res.json({ success: true, data: existing });
+  } catch (err) {
+    console.error("updateCrpStaffRecord:", err);
+    return res.status(500).json({ message: "Failed to update CRP staff record" });
+  }
+};
+
 export const getCrpStaffRecords = async (req, res) => {
   try {
     const {
