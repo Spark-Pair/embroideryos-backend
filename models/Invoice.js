@@ -35,5 +35,6 @@ const invoiceSchema = new mongoose.Schema(
 
 invoiceSchema.index({ businessId: 1, invoice_date: -1, createdAt: -1 });
 invoiceSchema.index({ businessId: 1, invoice_number: 1 }, { unique: true, sparse: true });
+invoiceSchema.index({ businessId: 1, customer_id: 1, invoice_date: -1 });
 
 export default mongoose.model("Invoice", invoiceSchema);

@@ -5,7 +5,7 @@ const userSchema = new mongoose.Schema({
   name: { type: String, required: true },
   username: { type: String, required: true, unique: true },
   password: { type: String, required: true },
-  role: { type: String, enum: ['developer', 'admin', 'staff'], default: 'staff' },
+  role: { type: String, default: 'staff' },
   isActive: { type: Boolean, default: true },
   businessId: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: false },
   shortcuts: {

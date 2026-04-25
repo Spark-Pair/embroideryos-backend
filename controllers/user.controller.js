@@ -1,5 +1,8 @@
 // controllers/user.controller.js
 import User from "../models/User.js";
+import Business from "../models/Business.js";
+import SessionService from "../services/SessionService.js";
+import { normalizeBusinessUserRoles } from "../utils/accessConfig.js";
 
 const normalizeLimit = (value, fallback = 1) => {
   const parsed = Number(value);
@@ -88,6 +91,40 @@ export const getUsersStats = async (req, res) => {
       success: false,
       message: "Failed to fetch stats",
     });
+  }
+};
+
+export const getLoggedInUsers = async (req, res) => {
+  try {
+    const data = await SessionService.getActiveSessionsForDeveloper();
+
+    res.json({
+      data,
+      stats: {
+        totalUsers: data.length,
+        totalSessions: data.reduce((sum, item) => sum + Number(item.sessionCount || 0), 0),
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Failed to fetch active sessions" });
+  }
+};
+
+export const logoutUserEverywhere = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select("_id name");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    await SessionService.invalidateAllUserSessions(user._id);
+
+    res.json({
+      id: user._id,
+      message: `${user.name} logged out from all devices`,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Failed to logout user" });
   }
 };
 
@@ -198,7 +235,9 @@ export const createBusinessUser = async (req, res) => {
       return res.status(409).json({ message: "Username already exists" });
     }
 
-    const normalizedRole = ["admin", "staff"].includes(role) ? role : "staff";
+    const business = await Business.findById(businessId).select("reference_data").lean();
+    const allowedRoles = normalizeBusinessUserRoles(business?.reference_data?.user_roles || []);
+    const normalizedRole = allowedRoles.includes(role) ? role : "staff";
 
     const user = await User.create({
       name,

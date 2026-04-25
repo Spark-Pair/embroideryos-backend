@@ -5,13 +5,11 @@ const expenseItemSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true },
     expense_type: {
       type: String,
-      enum: ["general", "cash", "supplier", "fixed"],
       required: true,
       index: true,
     },
     fixed_source: {
       type: String,
-      enum: ["", "cash", "supplier"],
       default: "",
       index: true,
     },

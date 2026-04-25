@@ -3,6 +3,7 @@ import Staff from "../models/Staff.js";
 import StaffRecord from "../models/StaffRecord.js";
 import StaffPayment from "../models/StaffPayment.js";
 import CrpStaffRecord from "../models/CrpStaffRecord.js";
+import { applyPaymentEffect, getBusinessRuleContextByBusinessId, getStaffPaymentTypeRule } from "../utils/businessRuleData.js";
 
 const parseOpeningBalance = (value) => {
   if (value === undefined || value === null || value === "") return 0;
@@ -55,40 +56,28 @@ const attachStaffCurrentBalance = async (staffs, businessFilter = {}) => {
       { $match: recordMatch },
       { $group: { _id: "$staff_id", total: { $sum: "$total_amount" } } },
     ]),
-    StaffPayment.aggregate([
-      { $match: paymentMatch },
-      {
-        $group: {
-          _id: "$staff_id",
-          advance: { $sum: { $cond: [{ $eq: ["$type", "advance"] }, "$amount", 0] } },
-          payment: { $sum: { $cond: [{ $eq: ["$type", "payment"] }, "$amount", 0] } },
-          adjustment: { $sum: { $cond: [{ $eq: ["$type", "adjustment"] }, "$amount", 0] } },
-        },
-      },
-    ]),
+    StaffPayment.find(paymentMatch).select("staff_id type amount").lean(),
   ]);
 
   const recordMap = new Map(recordTotals.map((row) => [toId(row._id), Number(row.total || 0)]));
   const crpRecordMap = new Map(crpRecordTotals.map((row) => [toId(row._id), Number(row.total || 0)]));
-  const paymentMap = new Map(
-    paymentTotals.map((row) => [
-      toId(row._id),
-      {
-        advance: Number(row.advance || 0),
-        payment: Number(row.payment || 0),
-        adjustment: Number(row.adjustment || 0),
-      },
-    ])
-  );
+  const paymentMap = new Map();
+  const ruleContext = await getBusinessRuleContextByBusinessId(businessFilter?.businessId);
+  paymentTotals.forEach((row) => {
+    const key = toId(row?.staff_id);
+    const current = paymentMap.get(key) || 0;
+    const rule = getStaffPaymentTypeRule(ruleContext, row?.type);
+    paymentMap.set(key, applyPaymentEffect(row?.amount, rule?.history_effect, current));
+  });
 
   return staffs.map((staff) => {
     const id = toId(staff._id);
     const opening = Number(staff.opening_balance || 0);
     const earned = (recordMap.get(id) || 0) + (crpRecordMap.get(id) || 0);
-    const paid = paymentMap.get(id) || { advance: 0, payment: 0, adjustment: 0 };
+    const paidEffect = Number(paymentMap.get(id) || 0);
     return {
       ...(typeof staff.toObject === "function" ? staff.toObject() : staff),
-      current_balance: opening + earned + paid.adjustment - paid.advance - paid.payment,
+      current_balance: opening + earned + paidEffect,
     };
   });
 };
@@ -104,7 +93,7 @@ export const createStaff = async (req, res) => {
 
     const staff = await Staff.create({
       name,
-      category: category || "Embroidery",
+      category: category || "",
       joining_date,
       salary,
       opening_balance: parseOpeningBalance(opening_balance),

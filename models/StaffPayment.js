@@ -20,7 +20,6 @@ const staffPaymentSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["advance", "payment", "adjustment"],
       required: true,
     },
     amount: {
@@ -42,5 +41,8 @@ const staffPaymentSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+staffPaymentSchema.index({ businessId: 1, date: -1, createdAt: -1 });
+staffPaymentSchema.index({ businessId: 1, month: 1, staff_id: 1 });
 
 export default mongoose.model("StaffPayment", staffPaymentSchema);

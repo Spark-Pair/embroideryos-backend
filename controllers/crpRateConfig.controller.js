@@ -1,12 +1,8 @@
 import mongoose from "mongoose";
 import CrpRateConfig from "../models/CrpRateConfig.js";
 
-const CATEGORIES = new Set(["Press", "Cropping", "Other"]);
-
 const normalizeCategory = (value) => {
-  const category = String(value || "").trim();
-  if (category === "Packing") return "Cropping";
-  return category;
+  return String(value || "").trim();
 };
 
 const toNum = (value) => {
@@ -31,7 +27,7 @@ export const createCrpRateConfig = async (req, res) => {
     const { type_name, rate } = req.body;
     const category = normalizeCategory(req.body.category);
 
-    if (!CATEGORIES.has(category)) {
+    if (!category) {
       return res.status(400).json({ message: "Invalid category" });
     }
     if (!type_name?.trim()) {
@@ -67,7 +63,7 @@ export const getCrpRateConfigs = async (req, res) => {
 
     const filter = { ...buildBusinessFilter(req, businessId) };
 
-    if (category && CATEGORIES.has(category)) filter.category = category;
+    if (category) filter.category = category;
     if (status === "active") filter.isActive = true;
     if (status === "inactive") filter.isActive = false;
     if (type_name?.trim()) filter.type_name = { $regex: type_name.trim(), $options: "i" };
@@ -91,7 +87,7 @@ export const updateCrpRateConfig = async (req, res) => {
     if (!item) return res.status(404).json({ message: "CRP rate config not found" });
 
     if (req.body.category !== undefined) {
-      if (!CATEGORIES.has(nextCategory)) {
+      if (!nextCategory) {
         return res.status(400).json({ message: "Invalid category" });
       }
       item.category = nextCategory;

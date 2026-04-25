@@ -3,13 +3,6 @@ import Customer from "../models/Customer.js";
 import Order from "../models/Order.js";
 import ProductionConfig from "../models/ProductionConfig.js";
 
-const DEFAULT_STITCH_FORMULA_RULES = [
-  { up_to: 4237, mode: "fixed", value: 5000 },
-  { up_to: 10000, mode: "percent", value: 18 },
-  { up_to: 50000, mode: "percent", value: 10 },
-  { up_to: null, mode: "percent", value: 5 },
-];
-
 function toNum(val) {
   if (val === "" || val == null) return 0;
   const n = Number(val);
@@ -32,7 +25,7 @@ function toBool(value, fallback = false) {
 }
 
 function normalizeFormulaRules(rawRules) {
-  if (!Array.isArray(rawRules) || rawRules.length === 0) return DEFAULT_STITCH_FORMULA_RULES;
+  if (!Array.isArray(rawRules) || rawRules.length === 0) return [];
   const clean = rawRules
     .map((rule = {}) => {
       const upToRaw = rule?.up_to;
@@ -46,7 +39,7 @@ function normalizeFormulaRules(rawRules) {
       const bv = b.up_to == null ? Number.POSITIVE_INFINITY : b.up_to;
       return av - bv;
     });
-  return clean.length ? clean : DEFAULT_STITCH_FORMULA_RULES;
+  return clean;
 }
 
 function computeDesignStitchesByConfig(actualStitches, config) {
@@ -93,7 +86,9 @@ function computeDesignStitchFromRate(rate, stitchRate, apqChr) {
 }
 
 function computeQtPcs(qty, unit) {
-  return unit === "Dzn" ? toNum(qty) * 12 : toNum(qty);
+  const normalizedUnit = String(unit || "").trim().toLowerCase();
+  const multiplier = normalizedUnit.includes("dzn") || normalizedUnit.includes("dozen") ? 12 : 1;
+  return toNum(qty) * multiplier;
 }
 
 function computeTotalAmount(rate, qtPcs) {
@@ -171,7 +166,7 @@ async function buildOrderPayload(body, businessFilter = {}) {
     }
   }
 
-  const resolvedUnit = unit === "Pcs" ? "Pcs" : "Dzn";
+  const resolvedUnit = typeof unit === "string" ? unit.trim() : "";
   const resolvedQty = toNum(quantity);
   const resolvedActualStitches = toNum(actual_stitches);
   const resolvedApq = apq === "" || apq == null ? null : Math.max(0, Math.min(30, Math.floor(toNum(apq))));

@@ -2,13 +2,22 @@ import mongoose from "mongoose";
 import StaffRecord from "../models/StaffRecord.js";
 import ProductionConfig from "../models/ProductionConfig.js";
 import Staff from "../models/Staff.js";
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const NO_PRODUCTION   = new Set(["Absent", "Off", "Close", "Sunday"]);
-const NO_AMOUNT       = new Set(["Absent", "Close"]);  // 0 for everyone
-const NO_BONUS        = new Set(["Absent", "Off", "Close", "Sunday"]);
-const STITCH_CAP      = 5000;
+import {
+  DEFAULT_PAYOUT_MODE,
+  PAYOUT_MODES,
+  calculateProductionRow,
+  calculateProductionTotals,
+  getTargetProgress,
+  isTargetMode,
+  normalizeProductionConfig,
+  shouldShowProductionAmount,
+} from "../utils/productionPayout.js";
+import {
+  ATTENDANCE_ALLOWANCE_CODES,
+  ATTENDANCE_PAY_MODES,
+  getAttendanceRule,
+  getBusinessRuleContextByBusinessId,
+} from "../utils/businessRuleData.js";
 
 const resolveBusinessId = (req) => {
   if (req.user?.role !== "developer") {
@@ -61,41 +70,12 @@ async function getConfigForDate(recordDate, businessId) {
 
 // ─── Production row calculation ───────────────────────────────────────────────
 
-const STITCH_CALC_VALUE = (raw) =>
-  raw > 0 && raw <= STITCH_CAP ? STITCH_CAP : raw;
-
 function calcRow(row, config) {
-  const d_stitch  = STITCH_CALC_VALUE(row.d_stitch ?? 0);
-  const pcs       = row.pcs    || 0;
-  const rounds    = row.rounds || 0;
-  const applique  = row.applique || 0;
-
-  const { stitch_rate, applique_rate, on_target_pct, after_target_pct } = config;
-
-  const total_stitch     = row.d_stitch * rounds;
-  const stitch_base      = d_stitch * stitch_rate * pcs / 100;
-  const applique_base    = applique_rate * applique * pcs / 100;
-  const combined         = stitch_base + applique_base;
-  const on_target_amt    = combined * on_target_pct;
-  const after_target_amt = combined * after_target_pct;
-
-  return { total_stitch, on_target_amt, after_target_amt };
+  return calculateProductionRow(row, config);
 }
 
 function calcTotals(rows, config) {
-  return rows.reduce(
-    (acc, row) => {
-      const { total_stitch, on_target_amt, after_target_amt } = calcRow(row, config);
-      return {
-        pcs:              acc.pcs    + (row.pcs    || 0),
-        rounds:           acc.rounds + (row.rounds || 0),
-        total_stitch:     acc.total_stitch     + total_stitch,
-        on_target_amt:    acc.on_target_amt    + on_target_amt,
-        after_target_amt: acc.after_target_amt + after_target_amt,
-      };
-    },
-    { pcs: 0, rounds: 0, total_stitch: 0, on_target_amt: 0, after_target_amt: 0 }
-  );
+  return calculateProductionTotals(rows, config);
 }
 
 const buildEffectivePercentExpr = () => ({
@@ -104,9 +84,29 @@ const buildEffectivePercentExpr = () => ({
     null,
     {
       $cond: [
-        { $gt: [{ $ifNull: ["$totals.on_target_amt", 0] }, 0] },
+        {
+          $ne: [
+            { $ifNull: ["$config_snapshot.payout_mode", DEFAULT_PAYOUT_MODE] },
+            PAYOUT_MODES.TARGET_DUAL_PCT,
+          ],
+        },
         {
           $cond: [
+            {
+              $eq: [
+                { $ifNull: ["$config_snapshot.payout_mode", DEFAULT_PAYOUT_MODE] },
+                PAYOUT_MODES.SINGLE_PCT,
+              ],
+            },
+            { $ifNull: ["$config_snapshot.production_pct", null] },
+            null,
+          ],
+        },
+        {
+          $cond: [
+            { $gt: [{ $ifNull: ["$totals.on_target_amt", 0] }, 0] },
+            {
+              $cond: [
                 {
                   $or: [
                     {
@@ -119,11 +119,13 @@ const buildEffectivePercentExpr = () => ({
                     { $eq: [{ $ifNull: ["$force_full_target_for_non_target", false] }, true] },
                   ],
                 },
-            { $ifNull: ["$config_snapshot.after_target_pct", null] },
-            { $ifNull: ["$config_snapshot.on_target_pct", null] },
+                { $ifNull: ["$config_snapshot.after_target_pct", null] },
+                { $ifNull: ["$config_snapshot.on_target_pct", null] },
+              ],
+            },
+            null,
           ],
         },
-        null,
       ],
     },
   ],
@@ -139,69 +141,50 @@ function resolveBaseAmount({
   totals,
   salary,
   config,
+  attendanceRule,
   forceAfterTargetForNonTarget = false,
   forceFullTargetForNonTarget = false,
 }) {
+  const normalizedConfig = normalizeProductionConfig(config);
+  const targetMode = isTargetMode(normalizedConfig);
+  const productionEnabled = shouldShowProductionAmount(normalizedConfig);
   const hasSalary    = salary != null && salary > 0;
   const perDay       = hasSalary ? salary / 30 : 0;
   const perHalfDay   = hasSalary ? salary / 60 : 0;
-  const targetAmount = config.target_amount ?? 1000;
-  const offAmount    = config.off_amount    ?? 0;
-  const onTargetPct = config.on_target_pct ?? 0;
-  const afterTargetPct = config.after_target_pct ?? 0;
-  const fullTargetAfterAmount =
-    onTargetPct > 0 ? (targetAmount / onTargetPct) * afterTargetPct : targetAmount;
+  const offAmount    = normalizedConfig.off_amount ?? 0;
+  const target = getTargetProgress(totals, normalizedConfig, {
+    force_after_target_for_non_target: forceAfterTargetForNonTarget,
+    force_full_target_for_non_target: forceFullTargetForNonTarget,
+  });
 
   let base_amount        = 0;
   let resolvedAttendance = attendance;
 
-  if (NO_AMOUNT.has(attendance)) {
-    // Absent / Close → 0 for everyone
-    base_amount = 0;
-
-  } else if (attendance === "Sunday") {
-    base_amount = hasSalary ? perDay : 0;
-
-  } else if (attendance === "Off") {
-    base_amount = hasSalary ? perDay : offAmount;
-
-  } else if (attendance === "Half") {
-    if (hasSalary) {
-      base_amount = perHalfDay;
-    } else {
-      // Non-salary: use production amount; if on-target → upgrade to Day
-      const productionAmt = totals
-        ? (
-            forceFullTargetForNonTarget
-              ? fullTargetAfterAmount
-              : (totals.on_target_amt >= targetAmount || forceAfterTargetForNonTarget)
-            ? totals.after_target_amt
-            : totals.on_target_amt
-          )
-        : 0;
-
-      if (totals && totals.on_target_amt >= targetAmount) {
-        resolvedAttendance = "Day"; // upgrade
+  switch (attendanceRule?.pay_mode) {
+    case ATTENDANCE_PAY_MODES.ZERO:
+      base_amount = 0;
+      break;
+    case ATTENDANCE_PAY_MODES.SALARY_DAY_OR_OFF_AMOUNT:
+      base_amount = hasSalary ? perDay : offAmount;
+      break;
+    case ATTENDANCE_PAY_MODES.SALARY_HALF_OR_PRODUCTION:
+      if (hasSalary) {
+        base_amount = perHalfDay;
+      } else {
+        base_amount = productionEnabled ? target.effectiveAmount : 0;
+        if (targetMode && target.targetMet && attendanceRule?.upgrade_half_to_day) {
+          resolvedAttendance = "Day";
+        }
       }
-
-      base_amount = productionAmt;
-    }
-
-  } else {
-    // Day / Night
-    if (hasSalary) {
-      base_amount = perDay;
-    } else {
-      base_amount = totals
-        ? (
-            forceFullTargetForNonTarget
-              ? fullTargetAfterAmount
-              : (totals.on_target_amt >= targetAmount || forceAfterTargetForNonTarget)
-            ? totals.after_target_amt
-            : totals.on_target_amt
-          )
-        : 0;
-    }
+      break;
+    case ATTENDANCE_PAY_MODES.SALARY_DAY_OR_PRODUCTION:
+    default:
+      if (hasSalary) {
+        base_amount = perDay;
+      } else {
+        base_amount = productionEnabled ? target.effectiveAmount : 0;
+      }
+      break;
   }
 
   return { base_amount, resolvedAttendance };
@@ -221,13 +204,17 @@ async function buildRecordPayload({
   force_after_target_for_non_target = false,
   force_full_target_for_non_target = false,
   businessFilter = {},
+  ruleContext,
 }) {
   // Fetch staff to get salary
   const staff = await Staff.findOne({ _id: staff_id, ...businessFilter }).select("salary category").lean();
   const salary = staff?.salary ?? null;
   const canUseTargetOverrides = !(salary != null && salary > 0);
+  const normalizedConfig = normalizeProductionConfig(config);
+  const targetMode = isTargetMode(normalizedConfig);
 
-  const hasProduction    = !NO_PRODUCTION.has(attendance);
+  const attendanceRule = getAttendanceRule(ruleContext, attendance);
+  const hasProduction    = Boolean(attendanceRule?.counts_production);
   const cleanRows        = hasProduction ? (production || []) : [];
 
   // Recalculate rows
@@ -248,10 +235,12 @@ async function buildRecordPayload({
     ? calcTotals(recalculatedRows, config)
     : null;
   const useFullTargetForNonTarget =
+    targetMode &&
     Boolean(force_full_target_for_non_target) &&
     canUseTargetOverrides &&
-    !(totals && totals.on_target_amt >= (config.target_amount ?? 0));
+    !(getTargetProgress(totals, normalizedConfig).targetMet);
   const useAfterTargetForNonTarget =
+    targetMode &&
     Boolean(force_after_target_for_non_target) &&
     canUseTargetOverrides &&
     !useFullTargetForNonTarget;
@@ -262,13 +251,14 @@ async function buildRecordPayload({
     totals,
     salary,
     config,
+    attendanceRule,
     forceAfterTargetForNonTarget: useAfterTargetForNonTarget,
     forceFullTargetForNonTarget: useFullTargetForNonTarget,
   });
 
-  // Bonus — not allowed on Absent/Off/Close/Sunday
-  const canHaveBonus   = !NO_BONUS.has(resolvedAttendance);
-  const effectiveBonusRate = bonus_rate_override ?? config.bonus_rate ?? 200;
+  const resolvedAttendanceRule = getAttendanceRule(ruleContext, resolvedAttendance);
+  const canHaveBonus = Boolean(resolvedAttendanceRule?.allows_bonus);
+  const effectiveBonusRate = bonus_rate_override ?? normalizedConfig.bonus_rate ?? 0;
   const effectiveBonusQty  = canHaveBonus ? (bonus_qty || 0) : 0;
   const bonus_amount   = effectiveBonusQty * effectiveBonusRate;
 
@@ -290,15 +280,20 @@ async function buildRecordPayload({
     force_full_target_for_non_target: useFullTargetForNonTarget,
     final_amount,
     config_snapshot: {
-      stitch_rate:      config.stitch_rate,
-      applique_rate:    config.applique_rate,
-      on_target_pct:    config.on_target_pct,
-      after_target_pct: config.after_target_pct,
-      pcs_per_round:    config.pcs_per_round,
-      target_amount:    config.target_amount,
-      off_amount:       config.off_amount,
-      bonus_rate:       config.bonus_rate,
-      allowance:        config.allowance,
+      payout_mode:      normalizedConfig.payout_mode,
+      stitch_rate:      normalizedConfig.stitch_rate,
+      applique_rate:    normalizedConfig.applique_rate,
+      on_target_pct:    normalizedConfig.on_target_pct,
+      after_target_pct: normalizedConfig.after_target_pct,
+      production_pct:   normalizedConfig.production_pct,
+      stitch_block_size: normalizedConfig.stitch_block_size,
+      amount_per_block: normalizedConfig.amount_per_block,
+      pcs_per_round:    normalizedConfig.pcs_per_round,
+      target_amount:    normalizedConfig.target_amount,
+      off_amount:       normalizedConfig.off_amount,
+      bonus_rate:       normalizedConfig.bonus_rate,
+      allowance:        normalizedConfig.allowance,
+      stitch_cap:       normalizedConfig.stitch_cap,
     },
   };
 }
@@ -344,6 +339,7 @@ export const createStaffRecord = async (req, res) => {
     if (!config) {
       return res.status(400).json({ message: "Production config not found. Please set it up first." });
     }
+    const ruleContext = await getBusinessRuleContextByBusinessId(businessFilter.businessId);
 
     const payload = await buildRecordPayload({
       staff_id, date, attendance, production,
@@ -351,6 +347,7 @@ export const createStaffRecord = async (req, res) => {
       force_after_target_for_non_target,
       force_full_target_for_non_target,
       businessFilter,
+      ruleContext,
     });
 
     const record = await StaffRecord.create({
@@ -526,6 +523,7 @@ export const updateStaffRecord = async (req, res) => {
     const config =
       await getConfigForDate(record.date, record.businessId) ||
       await ProductionConfig.findOne({ businessId: record.businessId }).sort({ createdAt: -1 }).lean();
+    const ruleContext = await getBusinessRuleContextByBusinessId(record.businessId);
 
     const payload = await buildRecordPayload({
       staff_id:   record.staff_id,
@@ -545,6 +543,7 @@ export const updateStaffRecord = async (req, res) => {
           : record.force_full_target_for_non_target,
       config,
       businessFilter,
+      ruleContext,
     });
 
     Object.assign(record, payload);

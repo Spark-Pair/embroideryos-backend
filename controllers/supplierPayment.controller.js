@@ -3,8 +3,6 @@ import Supplier from "../models/Supplier.js";
 import SupplierPayment from "../models/SupplierPayment.js";
 import Expense from "../models/Expense.js";
 
-const PAYMENT_METHODS = new Set(["cash", "cheque", "online", "goods_return"]);
-
 const normalizeMonth = (month) => (typeof month === "string" ? month.trim() : "");
 const normalizeText = (val) => (typeof val === "string" ? val.trim() : "");
 
@@ -36,7 +34,7 @@ export const createSupplierPayment = async (req, res) => {
       return res.status(400).json({ message: "Month must be in YYYY-MM format" });
     }
 
-    if (!PAYMENT_METHODS.has(method)) {
+    if (!normalizeText(method)) {
       return res.status(400).json({ message: "Invalid payment method" });
     }
 
@@ -95,7 +93,7 @@ export const getSupplierPayments = async (req, res) => {
       filter.supplier_id = new mongoose.Types.ObjectId(supplier_id);
     }
 
-    if (method && PAYMENT_METHODS.has(method)) {
+    if (method && normalizeText(method)) {
       filter.method = method;
     }
 
@@ -153,32 +151,52 @@ export const getSupplierPaymentStats = async (req, res) => {
   try {
     const filter = buildBusinessFilter(req);
 
-    const [stats] = await SupplierPayment.aggregate([
-      { $match: filter },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: 1 },
-          cash: { $sum: { $cond: [{ $eq: ["$method", "cash"] }, 1, 0] } },
-          cheque: { $sum: { $cond: [{ $eq: ["$method", "cheque"] }, 1, 0] } },
-          online: { $sum: { $cond: [{ $eq: ["$method", "online"] }, 1, 0] } },
-          goods_return: { $sum: { $cond: [{ $eq: ["$method", "goods_return"] }, 1, 0] } },
-          total_amount: { $sum: "$amount" },
+    const [summaryRows, breakdownRows] = await Promise.all([
+      SupplierPayment.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            total_amount: { $sum: "$amount" },
+          },
         },
-      },
+      ]),
+      SupplierPayment.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: "$method",
+            count: { $sum: 1 },
+            amount: { $sum: "$amount" },
+          },
+        },
+        { $sort: { count: -1, _id: 1 } },
+      ]),
     ]);
+
+    const summary = summaryRows?.[0] || {};
+    const breakdown = (breakdownRows || [])
+      .map((row) => ({
+        key: String(row?._id || "").trim(),
+        count: Number(row?.count || 0),
+        amount: Number(row?.amount || 0),
+      }))
+      .filter((row) => row.key);
+
+    const counts_by_key = breakdown.reduce((acc, row) => {
+      acc[row.key] = row.count;
+      return acc;
+    }, {});
 
     return res.json({
       success: true,
-      data:
-        stats || {
-          total: 0,
-          cash: 0,
-          cheque: 0,
-          online: 0,
-          goods_return: 0,
-          total_amount: 0,
-        },
+      data: {
+        total: Number(summary?.total || 0),
+        total_amount: Number(summary?.total_amount || 0),
+        breakdown,
+        counts_by_key,
+      },
     });
   } catch (err) {
     console.error("getSupplierPaymentStats:", err);
@@ -230,10 +248,6 @@ export const getSupplierStatement = async (req, res) => {
     const supplierExpenseFilter = {
       ...businessFilter,
       supplier_id: supplierObjectId,
-      $or: [
-        { expense_type: "supplier" },
-        { expense_type: "fixed", fixed_source: "supplier" },
-      ],
     };
 
     const [priorExpensesAgg, priorPaymentsAgg, expenses, payments] = await Promise.all([

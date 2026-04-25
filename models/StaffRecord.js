@@ -35,7 +35,6 @@ const staffRecordSchema = new mongoose.Schema(
     date:       { type: Date,   required: true },
     attendance: {
       type: String,
-      enum: ["Day", "Night", "Half", "Absent", "Off", "Close", "Sunday"],
       required: true,
     },
 
@@ -65,15 +64,20 @@ const staffRecordSchema = new mongoose.Schema(
 
     // ── Config snapshot (locked at time of entry) ───────────────────────────────
     config_snapshot: {
+      payout_mode:      { type: String },
       stitch_rate:      { type: Number },
       applique_rate:    { type: Number },
       on_target_pct:    { type: Number },
       after_target_pct: { type: Number },
+      production_pct:   { type: Number },
+      stitch_block_size:{ type: Number },
+      amount_per_block: { type: Number },
       pcs_per_round:    { type: Number },
       target_amount:    { type: Number },
       off_amount:       { type: Number },
       bonus_rate:       { type: Number },
       allowance:        { type: Number },
+      stitch_cap:       { type: Number },
     },
     businessId: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true },
   },
@@ -81,5 +85,7 @@ const staffRecordSchema = new mongoose.Schema(
 );
 
 staffRecordSchema.index({ staff_id: 1, date: 1 }, { unique: true });
+staffRecordSchema.index({ businessId: 1, date: -1, createdAt: -1 });
+staffRecordSchema.index({ businessId: 1, staff_id: 1, date: -1 });
 
 export default mongoose.model("StaffRecord", staffRecordSchema);

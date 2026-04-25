@@ -9,15 +9,18 @@ export default async (req, res, next) => {
 
     // Check if user has businessId
     if (!req.user.businessId) {
-      return res.status(403).json({ message: 'No business associated with user' });
+      return res.status(403).json({
+        message: 'No business associated with user',
+        code: 'BUSINESS_MISSING',
+      });
     }
 
     const business = await Business.findById(req.user.businessId).select("isActive").lean();
     if (!business) {
-      return res.status(403).json({ message: "Business not found" });
+      return res.status(403).json({ message: "Business not found", code: "BUSINESS_MISSING" });
     }
     if (business.isActive === false) {
-      return res.status(402).json({ message: "Business inactive" });
+      return res.status(402).json({ message: "Business inactive", code: "BUSINESS_INACTIVE" });
     }
 
     // Fetch subscription by businessId
@@ -67,7 +70,7 @@ export default async (req, res, next) => {
 
     // Subscription inactive (non-expired states like canceled)
     if (!subscription.active || subscription.status === "canceled") {
-      return res.status(402).json({ message: "Subscription inactive" });
+      return res.status(402).json({ message: "Subscription inactive", code: "SUBSCRIPTION_INACTIVE" });
     }
 
     // Attach subscription to request for downstream use

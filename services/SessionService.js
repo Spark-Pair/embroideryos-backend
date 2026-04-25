@@ -101,6 +101,75 @@ class SessionService {
     }));
   }
 
+  static async getActiveSessionsForDeveloper() {
+    const sessions = await Session.find({ valid: true })
+      .populate({
+        path: 'userId',
+        select: 'name username role isActive businessId',
+        populate: {
+          path: 'businessId',
+          select: 'name',
+        },
+      })
+      .sort({ lastActivity: -1 })
+      .lean();
+
+    const grouped = new Map();
+
+    sessions.forEach((session) => {
+      const user = session.userId;
+      if (!user) return;
+
+      const userKey = String(user._id);
+      if (!grouped.has(userKey)) {
+        grouped.set(userKey, {
+          userId: userKey,
+          name: user.name,
+          username: user.username,
+          role: user.role,
+          isActive: Boolean(user.isActive),
+          businessName: user.businessId?.name || '',
+          sessionCount: 0,
+          lastActivity: session.lastActivity || session.createdAt || null,
+          createdAt: session.createdAt || null,
+          sessions: [],
+        });
+      }
+
+      const current = grouped.get(userKey);
+      current.sessionCount += 1;
+      current.sessions.push({
+        sessionId: session.sessionId,
+        device: session.device,
+        os: session.os,
+        browser: session.browser,
+        ipAddress: session.ipAddress,
+        createdAt: session.createdAt,
+        lastActivity: session.lastActivity,
+      });
+
+      if (
+        session.lastActivity &&
+        (!current.lastActivity || new Date(session.lastActivity) > new Date(current.lastActivity))
+      ) {
+        current.lastActivity = session.lastActivity;
+      }
+
+      if (
+        session.createdAt &&
+        (!current.createdAt || new Date(session.createdAt) < new Date(current.createdAt))
+      ) {
+        current.createdAt = session.createdAt;
+      }
+    });
+
+    return Array.from(grouped.values()).sort((a, b) => {
+      const aTime = new Date(a.lastActivity || a.createdAt || 0).getTime();
+      const bTime = new Date(b.lastActivity || b.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
+  }
+
   // Verify refresh token
   static async verifyRefreshToken(refreshToken, sessionId) {
     try {

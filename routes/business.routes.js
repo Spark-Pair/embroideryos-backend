@@ -8,6 +8,12 @@ import {
   toggleBusinessStatus,
   getMyInvoiceBanner,
   updateMyInvoiceBanner,
+  getMyMachineOptions,
+  getMyReferenceData,
+  updateMyMachineOptions,
+  updateMyReferenceData,
+  getMyRuleData,
+  updateMyRuleData,
   getMyInvoiceCounter,
   updateMyInvoiceCounter,
 } from "../controllers/business.controller.js";
@@ -34,6 +40,42 @@ router.patch(
   subscriptionMiddleware,
   requireFeature("invoice_banner"),
   updateMyInvoiceBanner
+);
+router.get(
+  "/me/machine-options",
+  allowedRoles(['developer', 'admin', 'staff']),
+  subscriptionMiddleware,
+  getMyMachineOptions
+);
+router.patch(
+  "/me/machine-options",
+  allowedRoles(['developer', 'admin', 'staff']),
+  subscriptionMiddleware,
+  updateMyMachineOptions
+);
+router.get(
+  "/me/reference-data",
+  allowedRoles(['developer', 'admin', 'staff']),
+  subscriptionMiddleware,
+  getMyReferenceData
+);
+router.patch(
+  "/me/reference-data",
+  allowedRoles(['developer', 'admin', 'staff']),
+  subscriptionMiddleware,
+  updateMyReferenceData
+);
+router.get(
+  "/me/rule-data",
+  allowedRoles(['developer', 'admin', 'staff']),
+  subscriptionMiddleware,
+  getMyRuleData
+);
+router.patch(
+  "/me/rule-data",
+  allowedRoles(['developer', 'admin', 'staff']),
+  subscriptionMiddleware,
+  updateMyRuleData
 );
 router.get(
   "/me/invoice-counter",

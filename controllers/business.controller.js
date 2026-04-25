@@ -7,6 +7,8 @@ import InvoiceCounter from "../models/InvoiceCounter.js";
 import mongoose from "mongoose";
 import cloudinary from "../services/cloudinary.js";
 import { getPlanById, isFeatureEnabled } from "../services/plan.service.js";
+import { sanitizeRuleData } from "../utils/businessRuleData.js";
+import { normalizeBusinessUserRoles } from "../utils/accessConfig.js";
 
 function resolveBusinessId(req, requestedBusinessId) {
   if (req.user?.role === "developer") {
@@ -25,6 +27,63 @@ function isValidBannerPayload(value) {
   if (!value.startsWith("data:image/")) return false;
   if (!value.includes(";base64,")) return false;
   return value.length <= 8_000_000;
+}
+
+function sanitizeMachineOptions(rawOptions) {
+  if (!Array.isArray(rawOptions)) return [];
+  const seen = new Set();
+  return rawOptions
+    .map((item) => String(item ?? "").trim())
+    .filter((item) => item.length > 0)
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 50);
+}
+
+function sanitizeStringList(rawOptions, max = 50) {
+  if (!Array.isArray(rawOptions)) return [];
+  const seen = new Set();
+  return rawOptions
+    .map((item) => String(item ?? "").trim())
+    .filter((item) => item.length > 0)
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, max);
+}
+
+function sanitizeReferenceData(raw = {}) {
+  return {
+    attendance_options: sanitizeStringList(raw?.attendance_options),
+    staff_categories: sanitizeStringList(raw?.staff_categories),
+    user_roles: normalizeBusinessUserRoles(sanitizeStringList(raw?.user_roles)),
+    customer_payment_methods: sanitizeStringList(raw?.customer_payment_methods),
+    supplier_payment_methods: sanitizeStringList(raw?.supplier_payment_methods),
+    staff_payment_types: sanitizeStringList(raw?.staff_payment_types),
+    expense_types: sanitizeStringList(raw?.expense_types),
+    order_units: sanitizeStringList(raw?.order_units),
+    crp_categories: sanitizeStringList(raw?.crp_categories),
+    bank_suggestions: sanitizeStringList(raw?.bank_suggestions),
+    party_suggestions: sanitizeStringList(raw?.party_suggestions),
+  };
+}
+
+function syncReferenceDataWithRuleData(referenceData = {}, ruleData = {}) {
+  const nextReferenceData = {
+    ...referenceData,
+    attendance_options: (ruleData.attendance_rules || []).map((rule) => rule.label).filter(Boolean),
+    customer_payment_methods: (ruleData.customer_payment_method_rules || []).map((rule) => rule.method).filter(Boolean),
+    staff_payment_types: (ruleData.staff_payment_type_rules || []).map((rule) => rule.type).filter(Boolean),
+    expense_types: (ruleData.expense_type_rules || []).map((rule) => rule.key).filter(Boolean),
+  };
+  return sanitizeReferenceData(nextReferenceData);
 }
 
 // CREATE Business
@@ -256,6 +315,122 @@ export const updateMyInvoiceBanner = async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: "Failed to update invoice banner" });
+  }
+};
+
+export const getMyMachineOptions = async (req, res) => {
+  try {
+    const businessId = resolveBusinessId(req, req.query.businessId);
+    if (!businessId) return res.status(400).json({ message: "Business ID is required" });
+
+    const business = await Business.findById(businessId).select("machine_options");
+    if (!business) return res.status(404).json({ message: "Business not found" });
+
+    return res.json({
+      machine_options: sanitizeMachineOptions(business.machine_options),
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Failed to fetch machine options" });
+  }
+};
+
+export const updateMyMachineOptions = async (req, res) => {
+  try {
+    const businessId = resolveBusinessId(req, req.body?.businessId || req.query.businessId);
+    if (!businessId) return res.status(400).json({ message: "Business ID is required" });
+
+    const machineOptions = sanitizeMachineOptions(req.body?.machine_options);
+
+    const business = await Business.findById(businessId);
+    if (!business) return res.status(404).json({ message: "Business not found" });
+
+    business.machine_options = machineOptions;
+    await business.save();
+
+    return res.json({ machine_options: business.machine_options });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Failed to update machine options" });
+  }
+};
+
+export const getMyReferenceData = async (req, res) => {
+  try {
+    const businessId = resolveBusinessId(req, req.query.businessId);
+    if (!businessId) return res.status(400).json({ message: "Business ID is required" });
+
+    const business = await Business.findById(businessId).select("reference_data");
+    if (!business) return res.status(404).json({ message: "Business not found" });
+
+    return res.json({
+      reference_data: sanitizeReferenceData(business.reference_data || {}),
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Failed to fetch reference data" });
+  }
+};
+
+export const updateMyReferenceData = async (req, res) => {
+  try {
+    const businessId = resolveBusinessId(req, req.body?.businessId || req.query.businessId);
+    if (!businessId) return res.status(400).json({ message: "Business ID is required" });
+
+    const business = await Business.findById(businessId);
+    if (!business) return res.status(404).json({ message: "Business not found" });
+
+    business.reference_data = sanitizeReferenceData(req.body?.reference_data || {});
+    await business.save();
+
+    return res.json({
+      reference_data: sanitizeReferenceData(business.reference_data || {}),
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Failed to update reference data" });
+  }
+};
+
+export const getMyRuleData = async (req, res) => {
+  try {
+    const businessId = resolveBusinessId(req, req.query.businessId);
+    if (!businessId) return res.status(400).json({ message: "Business ID is required" });
+
+    const business = await Business.findById(businessId).select("reference_data rule_data");
+    if (!business) return res.status(404).json({ message: "Business not found" });
+
+    return res.json({
+      rule_data: sanitizeRuleData(business.rule_data || {}, sanitizeReferenceData(business.reference_data || {})),
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Failed to fetch rule data" });
+  }
+};
+
+export const updateMyRuleData = async (req, res) => {
+  try {
+    const businessId = resolveBusinessId(req, req.body?.businessId || req.query.businessId);
+    if (!businessId) return res.status(400).json({ message: "Business ID is required" });
+
+    const business = await Business.findById(businessId);
+    if (!business) return res.status(404).json({ message: "Business not found" });
+
+    const nextRuleData = sanitizeRuleData(req.body?.rule_data || {}, sanitizeReferenceData(business.reference_data || {}));
+    const nextReferenceData = syncReferenceDataWithRuleData(sanitizeReferenceData(business.reference_data || {}), nextRuleData);
+
+    business.rule_data = nextRuleData;
+    business.reference_data = nextReferenceData;
+    await business.save();
+
+    return res.json({
+      rule_data: sanitizeRuleData(business.rule_data || {}, nextReferenceData),
+      reference_data: nextReferenceData,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Failed to update rule data" });
   }
 };
 

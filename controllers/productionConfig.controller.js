@@ -1,41 +1,9 @@
 import mongoose from "mongoose";
 import ProductionConfig from "../models/ProductionConfig.js";
+import { normalizeProductionConfig } from "../utils/productionPayout.js";
 
-const DEFAULT_STITCH_FORMULA_RULES = [
-  { up_to: 4237, mode: "fixed", value: 5000 },
-  { up_to: 10000, mode: "percent", value: 18 },
-  { up_to: 50000, mode: "percent", value: 10 },
-  { up_to: null, mode: "percent", value: 5 },
-];
-
-const toNum = (value) => {
-  if (value === "" || value == null) return 0;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
-};
-
-const normalizeFormulaRules = (rawRules) => {
-  if (!Array.isArray(rawRules)) return DEFAULT_STITCH_FORMULA_RULES;
-
-  const clean = rawRules
-    .map((rule = {}) => {
-      const upToRaw = rule?.up_to;
-      const up_to =
-        upToRaw === "" || upToRaw == null ? null : Math.max(0, toNum(upToRaw));
-      const mode = ["fixed", "percent", "identity"].includes(rule?.mode)
-        ? rule.mode
-        : "identity";
-      const value = mode === "identity" ? 0 : Math.max(0, toNum(rule?.value));
-      return { up_to, mode, value };
-    })
-    .sort((a, b) => {
-      const av = a.up_to == null ? Number.POSITIVE_INFINITY : a.up_to;
-      const bv = b.up_to == null ? Number.POSITIVE_INFINITY : b.up_to;
-      return av - bv;
-    });
-
-  return clean.length ? clean : DEFAULT_STITCH_FORMULA_RULES;
-};
+const isDuplicateEffectiveDateError = (err) =>
+  Number(err?.code || 0) === 11000 && String(err?.message || "").includes("effective_date");
 
 const resolveBusinessId = (req) => {
   if (req.user?.role !== "developer") {
@@ -96,20 +64,24 @@ export const getProductionConfig = async (req, res) => {
 
 export const createProductionConfig = async (req, res) => {
   try {
+    const payload = normalizeProductionConfig(req.body || {});
     const {
+      payout_mode,
       stitch_rate,
       applique_rate,
       on_target_pct,
       after_target_pct,
+      production_pct,
+      stitch_block_size,
+      amount_per_block,
       pcs_per_round,
       target_amount,
       off_amount,
       bonus_rate,
       allowance,
-      stitch_formula_enabled,
-      stitch_formula_rules,
+      stitch_cap,
       effective_date,
-    } = req.body;
+    } = payload;
 
     const businessFilter = buildBusinessFilter(req, false);
     if (!businessFilter) {
@@ -117,17 +89,20 @@ export const createProductionConfig = async (req, res) => {
     }
 
     const config = await ProductionConfig.create({
+      payout_mode,
       stitch_rate,
       applique_rate,
       on_target_pct,
       after_target_pct,
+      production_pct,
+      stitch_block_size,
+      amount_per_block,
       pcs_per_round,
       target_amount,
       off_amount,
       bonus_rate,
-      allowance: allowance ?? 1500,
-      stitch_formula_enabled: stitch_formula_enabled !== undefined ? Boolean(stitch_formula_enabled) : true,
-      stitch_formula_rules: normalizeFormulaRules(stitch_formula_rules),
+      allowance,
+      stitch_cap,
       effective_date,
       businessId: businessFilter.businessId,
     });
@@ -135,26 +110,35 @@ export const createProductionConfig = async (req, res) => {
     return res.status(201).json({ success: true, data: config });
   } catch (err) {
     console.error("createProductionConfig:", err);
+    if (isDuplicateEffectiveDateError(err)) {
+      return res.status(409).json({
+        message: "A production config already exists for this effective date",
+      });
+    }
     return res.status(500).json({ message: "Failed to create config" });
   }
 };
 
 export const updateProductionConfig = async (req, res) => {
   try {
+    const payload = normalizeProductionConfig(req.body || {});
     const {
+      payout_mode,
       stitch_rate,
       applique_rate,
       on_target_pct,
       after_target_pct,
+      production_pct,
+      stitch_block_size,
+      amount_per_block,
       pcs_per_round,
       target_amount,
       off_amount,
       bonus_rate,
       allowance,
-      stitch_formula_enabled,
-      stitch_formula_rules,
+      stitch_cap,
       effective_date,
-    } = req.body;
+    } = payload;
 
     const businessFilter = buildBusinessFilter(req, false);
     if (!businessFilter) {
@@ -164,17 +148,20 @@ export const updateProductionConfig = async (req, res) => {
     const existing = await ProductionConfig.findOne(businessFilter).sort({ createdAt: -1 });
 
     if (existing) {
+      if (payout_mode !== undefined) existing.payout_mode = payout_mode;
       if (stitch_rate !== undefined) existing.stitch_rate = stitch_rate;
       if (applique_rate !== undefined) existing.applique_rate = applique_rate;
       if (on_target_pct !== undefined) existing.on_target_pct = on_target_pct;
       if (after_target_pct !== undefined) existing.after_target_pct = after_target_pct;
+      if (production_pct !== undefined) existing.production_pct = production_pct;
+      if (stitch_block_size !== undefined) existing.stitch_block_size = stitch_block_size;
+      if (amount_per_block !== undefined) existing.amount_per_block = amount_per_block;
       if (pcs_per_round !== undefined) existing.pcs_per_round = pcs_per_round;
       if (target_amount !== undefined) existing.target_amount = target_amount;
       if (off_amount !== undefined) existing.off_amount = off_amount;
       if (bonus_rate !== undefined) existing.bonus_rate = bonus_rate;
       if (allowance !== undefined) existing.allowance = allowance;
-      if (stitch_formula_enabled !== undefined) existing.stitch_formula_enabled = Boolean(stitch_formula_enabled);
-      if (stitch_formula_rules !== undefined) existing.stitch_formula_rules = normalizeFormulaRules(stitch_formula_rules);
+      if (stitch_cap !== undefined) existing.stitch_cap = stitch_cap;
       if (effective_date !== undefined) existing.effective_date = effective_date ? new Date(effective_date) : null;
 
       await existing.save();
@@ -182,17 +169,20 @@ export const updateProductionConfig = async (req, res) => {
     }
 
     const config = await ProductionConfig.create({
+      payout_mode,
       stitch_rate,
       applique_rate,
       on_target_pct,
       after_target_pct,
+      production_pct,
+      stitch_block_size,
+      amount_per_block,
       pcs_per_round,
       target_amount,
       off_amount,
       bonus_rate,
-      allowance: allowance ?? 1500,
-      stitch_formula_enabled: stitch_formula_enabled !== undefined ? Boolean(stitch_formula_enabled) : true,
-      stitch_formula_rules: normalizeFormulaRules(stitch_formula_rules),
+      allowance,
+      stitch_cap,
       effective_date: effective_date ? new Date(effective_date) : null,
       businessId: businessFilter.businessId,
     });
@@ -200,6 +190,11 @@ export const updateProductionConfig = async (req, res) => {
     return res.status(201).json({ success: true, data: config });
   } catch (err) {
     console.error("updateProductionConfig:", err);
+    if (isDuplicateEffectiveDateError(err)) {
+      return res.status(409).json({
+        message: "A production config already exists for this effective date",
+      });
+    }
     return res.status(500).json({ message: "Failed to update config" });
   }
 };

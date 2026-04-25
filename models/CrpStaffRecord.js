@@ -23,7 +23,6 @@ const crpStaffRecordSchema = new mongoose.Schema(
 
     category: {
       type: String,
-      enum: ["Press", "Cropping", "Other"],
       required: true,
       index: true,
     },
@@ -50,5 +49,6 @@ const crpStaffRecordSchema = new mongoose.Schema(
 );
 
 crpStaffRecordSchema.index({ businessId: 1, order_date: -1, createdAt: -1 });
+crpStaffRecordSchema.index({ businessId: 1, month: 1, staff_id: 1 });
 
 export default mongoose.model("CrpStaffRecord", crpStaffRecordSchema);

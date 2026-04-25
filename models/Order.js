@@ -17,7 +17,7 @@ const orderSchema = new mongoose.Schema(
     lot_no: { type: String, default: "", trim: true },
     client_ref: { type: String, default: null, trim: true, index: true },
 
-    unit: { type: String, enum: ["Dzn", "Pcs"], default: "Dzn" },
+    unit: { type: String, default: "" },
     quantity: { type: Number, required: true, min: 0 },
     qt_pcs: { type: Number, default: 0, min: 0 },
 

@@ -4,7 +4,6 @@ const crpRateConfigSchema = new mongoose.Schema(
   {
     category: {
       type: String,
-      enum: ["Press", "Cropping", "Other"],
       required: true,
       index: true,
     },

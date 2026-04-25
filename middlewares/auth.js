@@ -8,11 +8,11 @@ export default async (req, res, next) => {
   const sessionId = req.headers['x-session-id']; // Frontend sends this
 
   if (!token) {
-    return res.status(401).json({ message: 'No token provided' });
+    return res.status(401).json({ message: 'No token provided', code: 'AUTH_TOKEN_MISSING' });
   }
 
   if (!sessionId) {
-    return res.status(401).json({ message: 'No session ID provided' });
+    return res.status(401).json({ message: 'No session ID provided', code: 'SESSION_ID_MISSING' });
   }
 
   try {
@@ -40,7 +40,10 @@ export default async (req, res, next) => {
     const user = await User.findById(decoded.id).select('-password');
     if (!user || !user.isActive) {
       await SessionService.invalidateSession(sessionId);
-      return res.status(401).json({ message: 'User not found or inactive' });
+      return res.status(401).json({
+        message: 'User not found or inactive',
+        code: 'USER_INACTIVE',
+      });
     }
 
     // Developers bypass business check
@@ -52,12 +55,18 @@ export default async (req, res, next) => {
 
     // Business users: check business
     if (!user.businessId) {
-      return res.status(403).json({ message: 'No business associated' });
+      return res.status(403).json({
+        message: 'No business associated',
+        code: 'BUSINESS_MISSING',
+      });
     }
 
     const business = await Business.findById(user.businessId);
     if (!business || !business.isActive) {
-      return res.status(403).json({ message: 'Business not found or inactive' });
+      return res.status(403).json({
+        message: 'Business not found or inactive',
+        code: 'BUSINESS_INACTIVE',
+      });
     }
 
     req.user = user;
@@ -78,7 +87,7 @@ export default async (req, res, next) => {
       });
     }
     if (err.name === 'JsonWebTokenError') {
-      return res.status(401).json({ message: 'Invalid token' });
+      return res.status(401).json({ message: 'Invalid token', code: 'TOKEN_INVALID' });
     }
     console.error('Auth middleware error:', err);
     return res.status(500).json({ message: 'Authentication failed' });

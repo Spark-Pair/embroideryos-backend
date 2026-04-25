@@ -26,7 +26,6 @@ const customerPaymentSchema = new mongoose.Schema(
     },
     method: {
       type: String,
-      enum: ["cash", "cheque", "slip", "online", "adjustment"],
       required: true,
       index: true,
     },
@@ -74,5 +73,7 @@ const customerPaymentSchema = new mongoose.Schema(
 );
 
 customerPaymentSchema.index({ businessId: 1, date: -1, createdAt: -1 });
+customerPaymentSchema.index({ businessId: 1, customer_id: 1, date: -1 });
+customerPaymentSchema.index({ businessId: 1, month: 1, customer_id: 1 });
 
 export default mongoose.model("CustomerPayment", customerPaymentSchema);

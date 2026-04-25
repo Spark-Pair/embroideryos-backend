@@ -10,9 +10,18 @@ import CrpStaffRecord from "../models/CrpStaffRecord.js";
 import Customer from "../models/Customer.js";
 import Supplier from "../models/Supplier.js";
 import Staff from "../models/Staff.js";
+import {
+  applyPaymentEffect,
+  getAttendanceRule,
+  getBusinessRuleContextByBusinessId,
+  getStaffPaymentTypeRule,
+  isAllowanceEligibleWithRule,
+} from "../utils/businessRuleData.js";
 
 const MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
-const DEFAULT_ALLOWANCE = 1500;
+const RECENT_ORDER_FIELDS = "_id date customer_name description total_amount";
+const RECENT_INVOICE_FIELDS = "_id invoice_date customer_name invoice_number total_amount";
+const RECENT_EXPENSE_FIELDS = "_id date item_name supplier_name amount expense_type";
 
 const toYmd = (date) => {
   const d = new Date(date);
@@ -171,8 +180,11 @@ const parseDateInput = (value) => {
   return d;
 };
 
-const isAllowanceEligible = ({ recordCount, absentCount, halfCount }) =>
-  recordCount >= 26 && absentCount === 0 && halfCount <= 1;
+const applyAttendanceAllowanceCounters = (target, attendanceRule) => {
+  if (!target || !attendanceRule) return;
+  if (attendanceRule.allowance_code === "absent") target.absentCount += 1;
+  if (attendanceRule.allowance_code === "half") target.halfCount += 1;
+};
 
 const calculateCustomerMonthlySummary = async ({ businessMatch, selectedMonth, selectedRange }) => {
   const customers = await Customer.find(businessMatch)
@@ -553,7 +565,7 @@ const calculateCrpStaffMonthlySummary = async ({ businessMatch, selectedMonth })
   return total;
 };
 
-const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, selectedRange }) => {
+const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, selectedRange, ruleContext }) => {
   const prevMonthKey = previousMonth(selectedMonth);
 
   const staffs = await Staff.find({
@@ -622,6 +634,7 @@ const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, sele
         currentAdvance: 0,
         currentPayment: 0,
         currentAdjustment: 0,
+        paymentBreakdown: {},
       },
     ])
   );
@@ -647,8 +660,7 @@ const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, sele
         allowanceCandidate: null,
       };
       prev.recordCount += 1;
-      if (rec?.attendance === "Absent") prev.absentCount += 1;
-      if (rec?.attendance === "Half") prev.halfCount += 1;
+      applyAttendanceAllowanceCounters(prev, getAttendanceRule(ruleContext, rec?.attendance));
       prev.finalAmount += Number(rec?.final_amount || 0);
       const allowance = Number(rec?.config_snapshot?.allowance);
       if (Number.isFinite(allowance) && allowance >= 0) {
@@ -665,8 +677,9 @@ const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, sele
     current.currentFinal += Number(rec?.final_amount || 0);
     current.currentBonusQty += Number(rec?.bonus_qty || 0);
     current.currentBonusAmt += Number(rec?.bonus_amount || 0);
-    if (rec?.attendance === "Absent") current.currentAbsent += 1;
-    if (rec?.attendance === "Half") current.currentHalf += 1;
+    const attendanceRule = getAttendanceRule(ruleContext, rec?.attendance);
+    if (attendanceRule?.allowance_code === "absent") current.currentAbsent += 1;
+    if (attendanceRule?.allowance_code === "half") current.currentHalf += 1;
     const allowance = Number(rec?.config_snapshot?.allowance);
     if (Number.isFinite(allowance) && allowance >= 0) {
       current.currentAllowanceCandidate = allowance;
@@ -681,8 +694,12 @@ const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, sele
     const current = summaryByStaff.get(row.staffId);
     if (!current) return;
     current.arrears += Number(row.finalAmount || 0);
-    if (isAllowanceEligible(row)) {
-      current.arrears += Number(row.allowanceCandidate ?? DEFAULT_ALLOWANCE);
+    if (isAllowanceEligibleWithRule({
+      record_count: row.recordCount,
+      absent_count: row.absentCount,
+      half_count: row.halfCount,
+    }, ruleContext)) {
+      current.arrears += Number(row.allowanceCandidate ?? 0);
     }
   });
 
@@ -695,18 +712,21 @@ const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, sele
     const paymentMonth = typeof payment?.month === "string" && payment.month ? payment.month : "";
     if (!paymentMonth) return;
     const isHistoryPayment = paymentMonth <= prevMonthKey;
+    const paymentType = String(payment?.type || "").trim();
+    const paymentRule = getStaffPaymentTypeRule(ruleContext, paymentType);
 
     if (isHistoryPayment) {
-      current.arrears -= amount;
+      current.arrears = applyPaymentEffect(amount, paymentRule?.history_effect, current.arrears);
       return;
     }
 
     if (paymentMonth !== selectedMonth) return;
 
-    current.currentDeduction += amount;
-    if (payment?.type === "advance") current.currentAdvance += amount;
-    if (payment?.type === "payment") current.currentPayment += amount;
-    if (payment?.type === "adjustment") current.currentAdjustment += amount;
+    current.paymentBreakdown[paymentType] = Number(current.paymentBreakdown[paymentType] || 0) + amount;
+    if (paymentType === "advance") current.currentAdvance += amount;
+    if (paymentType === "payment") current.currentPayment += amount;
+    if (paymentType === "adjustment") current.currentAdjustment += amount;
+    if (paymentRule?.current_effect === "subtract") current.currentDeduction += amount;
   });
 
   let staffWithRecords = 0;
@@ -732,15 +752,20 @@ const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, sele
     if (row.currentRecordCount > 0) {
       staffWithRecords += 1;
     }
-    row.currentAllowance = isAllowanceEligible({
-      recordCount: row.currentRecordCount,
-      absentCount: row.currentAbsent,
-      halfCount: row.currentHalf,
-    })
-      ? Number(row.currentAllowanceCandidate ?? DEFAULT_ALLOWANCE)
+    row.currentAllowance = isAllowanceEligibleWithRule({
+      record_count: row.currentRecordCount,
+      absent_count: row.currentAbsent,
+      half_count: row.currentHalf,
+    }, ruleContext)
+      ? Number(row.currentAllowanceCandidate ?? 0)
       : 0;
 
     const workAmount = row.currentFinal - row.currentBonusAmt;
+    const startingBalance = row.arrears + row.currentFinal + row.currentAllowance;
+    const balance = Object.entries(row.paymentBreakdown || {}).reduce((acc, [type, amount]) => {
+      const paymentRule = getStaffPaymentTypeRule(ruleContext, type);
+      return applyPaymentEffect(amount, paymentRule?.current_effect, acc);
+    }, startingBalance);
 
     total.record_count += row.currentRecordCount;
     total.work_amount += workAmount;
@@ -752,7 +777,6 @@ const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, sele
     total.deduction_advance_amount += row.currentAdvance;
     total.deduction_payment_amount += row.currentPayment;
     total.deduction_adjustment_amount += row.currentAdjustment;
-    const balance = row.arrears + row.currentFinal + row.currentAllowance - row.currentDeduction;
     total.balance_amount += balance;
     total.by_staff.push({
       staff_id: row.staff_id,
@@ -768,6 +792,7 @@ const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, sele
       deduction_advance_amount: row.currentAdvance,
       deduction_payment_amount: row.currentPayment,
       deduction_adjustment_amount: row.currentAdjustment,
+      payment_breakdown: row.paymentBreakdown,
       balance_amount: balance,
     });
   });
@@ -814,6 +839,7 @@ const getTrendRange = ({ range, dateFrom, dateTo }) => {
 export const getDashboardSummary = async (req, res) => {
   try {
     const businessMatch = buildBusinessFilter(req);
+    const ruleContext = await getBusinessRuleContextByBusinessId(businessMatch?.businessId);
     const selectedMonth = sanitizeMonth(req.query?.month);
     const trendMode = req.query?.trend_mode === "last" ? "last" : "current";
 
@@ -888,9 +914,21 @@ export const getDashboardSummary = async (req, res) => {
       Supplier.countDocuments({ ...businessMatch, isActive: true }),
       Staff.countDocuments({ ...businessMatch, isActive: true }),
 
-      Order.find(businessMatch).sort({ date: -1, createdAt: -1 }).limit(5).lean(),
-      Invoice.find(businessMatch).sort({ invoice_date: -1, createdAt: -1 }).limit(5).lean(),
-      Expense.find(businessMatch).sort({ date: -1, createdAt: -1 }).limit(5).lean(),
+      Order.find(businessMatch)
+        .select(RECENT_ORDER_FIELDS)
+        .sort({ date: -1, createdAt: -1 })
+        .limit(5)
+        .lean(),
+      Invoice.find(businessMatch)
+        .select(RECENT_INVOICE_FIELDS)
+        .sort({ invoice_date: -1, createdAt: -1 })
+        .limit(5)
+        .lean(),
+      Expense.find(businessMatch)
+        .select(RECENT_EXPENSE_FIELDS)
+        .sort({ date: -1, createdAt: -1 })
+        .limit(5)
+        .lean(),
 
       aggregateTrendByDay(Order, "date", "total_amount", businessMatch, trendStart, trendEnd, true),
       aggregateTrendByDay(Invoice, "invoice_date", "total_amount", businessMatch, trendStart, trendEnd, true),
@@ -902,6 +940,7 @@ export const getDashboardSummary = async (req, res) => {
         businessMatch,
         selectedMonth,
         selectedRange,
+        ruleContext,
       }),
       calculateCustomerMonthlySummary({
         businessMatch,

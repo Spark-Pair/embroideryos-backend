@@ -20,5 +20,6 @@ const supplierSchema = new mongoose.Schema(
 );
 
 supplierSchema.index({ businessId: 1, name: 1 });
+supplierSchema.index({ businessId: 1, isActive: 1, name: 1 });
 
 export default mongoose.model("Supplier", supplierSchema);

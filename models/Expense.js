@@ -4,13 +4,11 @@ const expenseSchema = new mongoose.Schema(
   {
     expense_type: {
       type: String,
-      enum: ["cash", "supplier", "fixed"],
       default: "cash",
       index: true,
     },
     fixed_source: {
       type: String,
-      enum: ["", "cash", "supplier"],
       default: "",
       index: true,
     },
@@ -59,5 +57,6 @@ const expenseSchema = new mongoose.Schema(
 );
 
 expenseSchema.index({ businessId: 1, date: -1, createdAt: -1 });
+expenseSchema.index({ businessId: 1, supplier_id: 1, date: -1 });
 
 export default mongoose.model("Expense", expenseSchema);

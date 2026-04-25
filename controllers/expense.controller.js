@@ -1,9 +1,8 @@
 import mongoose from "mongoose";
 import Expense from "../models/Expense.js";
 import Supplier from "../models/Supplier.js";
-
-const EXPENSE_TYPES = new Set(["cash", "supplier", "fixed"]);
-const FIXED_SOURCES = new Set(["cash", "supplier"]);
+import ExpenseItem from "../models/ExpenseItem.js";
+import { getBusinessRuleContextByBusinessId, getExpenseTypeRule } from "../utils/businessRuleData.js";
 
 const toNum = (value) => {
   const num = Number(value);
@@ -12,6 +11,7 @@ const toNum = (value) => {
 
 const normalizeText = (val) => (typeof val === "string" ? val.trim() : "");
 const normalizeMonth = (value) => (typeof value === "string" ? value.trim() : "");
+const normalizeItemKey = (value) => normalizeText(value).toLowerCase();
 
 const buildBusinessFilter = (req, businessId) => {
   if (req.user?.role !== "developer") {
@@ -33,6 +33,91 @@ const parseDate = (date, month) => {
 
   if (!date || Number.isNaN(new Date(date).getTime())) return null;
   return new Date(date);
+};
+
+const resolveExpenseRule = async (req, businessId, expenseType) => {
+  if (normalizeText(expenseType).toLowerCase() === "fixed") {
+    return {
+      key: "fixed",
+      label: "Fixed Expense",
+      is_fixed: true,
+      requires_supplier: false,
+    };
+  }
+  const context = await getBusinessRuleContextByBusinessId(businessId);
+  const rule = getExpenseTypeRule(context, expenseType);
+  if (!rule?.key) return null;
+  return rule;
+};
+
+const escapeRegex = (value) => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const resolveFixedExpenseMeta = async (businessFilter, items = []) => {
+  const names = Array.from(new Set(items.map((row) => normalizeItemKey(row?.item_name)).filter(Boolean)));
+  if (names.length === 0) {
+    return { ok: false, message: "At least one valid fixed expense item is required" };
+  }
+
+  const fixedItems = await ExpenseItem.find({
+    ...businessFilter,
+    expense_type: "fixed",
+    $or: names.map((name) => ({ name: { $regex: `^${escapeRegex(name)}$`, $options: "i" } })),
+  })
+    .select("name fixed_source supplier_id supplier_name")
+    .lean();
+
+  const fixedMap = new Map(
+    fixedItems.map((item) => [normalizeItemKey(item?.name), item])
+  );
+  const matched = names.map((name) => fixedMap.get(name)).filter(Boolean);
+
+  if (matched.length !== names.length) {
+    return { ok: false, message: "Selected fixed expense item was not found in settings" };
+  }
+
+  const sourceSet = new Set(matched.map((item) => normalizeText(item?.fixed_source).toLowerCase()).filter(Boolean));
+  if (sourceSet.size !== 1) {
+    return { ok: false, message: "Selected fixed expense items must belong to the same fixed source" };
+  }
+
+  const fixedSource = Array.from(sourceSet)[0] || "cash";
+  if (fixedSource === "supplier") {
+    const supplierRows = matched.filter((item) => item?.supplier_id);
+    const supplierSet = new Set(supplierRows.map((item) => String(item.supplier_id)));
+    if (supplierSet.size !== 1) {
+      return { ok: false, message: "Selected supplier fixed expense items must belong to the same supplier" };
+    }
+    const supplierRow = supplierRows[0];
+    return {
+      ok: true,
+      fixedSource,
+      supplierId: String(supplierRow?.supplier_id || ""),
+      supplierName: supplierRow?.supplier_name || "",
+    };
+  }
+
+  return { ok: true, fixedSource, supplierId: "", supplierName: "" };
+};
+
+const validateSupplierExpenseItems = (supplier, items = []) => {
+  const allowedItems = new Set(
+    (Array.isArray(supplier?.assigned_expense_items) ? supplier.assigned_expense_items : [])
+      .map((name) => normalizeItemKey(name))
+      .filter(Boolean)
+  );
+
+  const invalidItems = items
+    .map((row) => normalizeText(row?.item_name))
+    .filter((name) => name && !allowedItems.has(name.toLowerCase()));
+
+  if (invalidItems.length > 0) {
+    return {
+      ok: false,
+      invalidItems: Array.from(new Set(invalidItems)),
+    };
+  }
+
+  return { ok: true, invalidItems: [] };
 };
 
 export const createExpense = async (req, res) => {
@@ -78,10 +163,6 @@ export const createExpense = async (req, res) => {
       return res.status(201).json({ success: true, data: [expense] });
     }
 
-    if (!EXPENSE_TYPES.has(expense_type)) {
-      return res.status(400).json({ message: "Invalid expense type" });
-    }
-
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ message: "At least one expense item is required" });
     }
@@ -91,9 +172,6 @@ export const createExpense = async (req, res) => {
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(normalizedMonth)) {
       return res.status(400).json({ message: "Month must be in YYYY-MM format" });
     }
-
-    const parsedDate = parseDate(date || fallbackDate, expense_type === "fixed" ? normalizedMonth : null);
-    if (!parsedDate) return res.status(400).json({ message: "Valid date/month is required" });
 
     const normalizedItems = items
       .map((row) => ({
@@ -112,29 +190,49 @@ export const createExpense = async (req, res) => {
     const businessId = businessFilter.businessId || req.body.businessId;
     if (!businessId) return res.status(400).json({ message: "businessId is required" });
 
-    let supplierName = "";
-    let supplierObjectId = null;
-
-    let fixedSource = "";
-    if (expense_type === "fixed") {
-      if (!FIXED_SOURCES.has(fixed_source)) {
-        return res.status(400).json({ message: "Fixed source must be cash or supplier" });
-      }
-      fixedSource = fixed_source;
+    const expenseRule = await resolveExpenseRule(req, businessId, expense_type);
+    if (!expenseRule?.key) {
+      return res.status(400).json({ message: "Invalid expense type" });
     }
 
-    if (expense_type === "supplier" || (expense_type === "fixed" && fixedSource === "supplier")) {
+    const parsedDate = parseDate(date || fallbackDate, expenseRule.is_fixed ? normalizedMonth : null);
+    if (!parsedDate) return res.status(400).json({ message: "Valid date/month is required" });
+
+    let supplierName = "";
+    let supplierObjectId = null;
+    let fixedSource = expenseRule.is_fixed ? (expenseRule.requires_supplier ? "supplier" : "cash") : "";
+
+    if (expenseRule.requires_supplier) {
       if (!supplier_id || !mongoose.Types.ObjectId.isValid(supplier_id)) {
         return res.status(400).json({ message: "Valid supplier is required" });
       }
 
       const supplier = await Supplier.findOne({ _id: supplier_id, ...buildBusinessFilter(req, req.body.businessId) })
-        .select("_id name")
+        .select("_id name assigned_expense_items")
         .lean();
       if (!supplier) return res.status(404).json({ message: "Supplier not found" });
 
+      const validation = validateSupplierExpenseItems(supplier, normalizedItems);
+      if (!validation.ok) {
+        return res.status(400).json({
+          message: `Selected items are not assigned to this supplier: ${validation.invalidItems.join(", ")}`,
+        });
+      }
+
       supplierObjectId = supplier._id;
       supplierName = supplier.name;
+    }
+
+    if (expenseRule.is_fixed && expenseRule.key === "fixed") {
+      const fixedMeta = await resolveFixedExpenseMeta(buildBusinessFilter(req, req.body.businessId), normalizedItems);
+      if (!fixedMeta.ok) {
+        return res.status(400).json({ message: fixedMeta.message });
+      }
+      fixedSource = fixedMeta.fixedSource;
+      supplierObjectId = fixedMeta.supplierId && mongoose.Types.ObjectId.isValid(fixedMeta.supplierId)
+        ? new mongoose.Types.ObjectId(fixedMeta.supplierId)
+        : null;
+      supplierName = fixedMeta.supplierName || "";
     }
 
     const groupKey = new mongoose.Types.ObjectId().toString();
@@ -145,7 +243,7 @@ export const createExpense = async (req, res) => {
       const derivedAmount = quantity > 0 && rate > 0 ? quantity * rate : rawAmount;
 
       return {
-        expense_type,
+        expense_type: expenseRule.is_fixed ? "fixed" : expenseRule.key,
         fixed_source: fixedSource,
         item_name: row.item_name,
         quantity,
@@ -174,7 +272,7 @@ export const createExpense = async (req, res) => {
     const avgRate = totalQuantity > 0 ? totalAmount / totalQuantity : totalAmount;
 
     const created = await Expense.create({
-      expense_type,
+      expense_type: expenseRule.is_fixed ? "fixed" : expenseRule.key,
       fixed_source: fixedSource,
       item_name: summaryTitle || "Expense",
       quantity: totalQuantity,
@@ -232,11 +330,11 @@ export const getExpenses = async (req, res) => {
       filter.$or = [{ item_name: pattern }, { "items.item_name": pattern }];
     }
 
-    if (expense_type && EXPENSE_TYPES.has(expense_type)) {
-      filter.expense_type = expense_type;
+    if (expense_type?.trim()) {
+      filter.expense_type = expense_type.trim();
     }
-    if (fixed_source && FIXED_SOURCES.has(fixed_source)) {
-      filter.fixed_source = fixed_source;
+    if (fixed_source?.trim()) {
+      filter.fixed_source = fixed_source.trim();
     }
 
     if (supplier_name?.trim()) {
@@ -288,28 +386,51 @@ export const getExpenseStats = async (req, res) => {
   try {
     const filter = buildBusinessFilter(req, req.query.businessId);
 
-    const [stats] = await Expense.aggregate([
-      { $match: filter },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: 1 },
-          total_amount: { $sum: "$amount" },
-          cash_count: { $sum: { $cond: [{ $eq: ["$expense_type", "cash"] }, 1, 0] } },
-          supplier_count: { $sum: { $cond: [{ $eq: ["$expense_type", "supplier"] }, 1, 0] } },
-          fixed_count: { $sum: { $cond: [{ $eq: ["$expense_type", "fixed"] }, 1, 0] } },
+    const [summaryRows, breakdownRows] = await Promise.all([
+      Expense.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            total_amount: { $sum: "$amount" },
+          },
         },
-      },
+      ]),
+      Expense.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: "$expense_type",
+            count: { $sum: 1 },
+            amount: { $sum: "$amount" },
+          },
+        },
+        { $sort: { count: -1, _id: 1 } },
+      ]),
     ]);
+
+    const summary = summaryRows?.[0] || {};
+    const breakdown = (breakdownRows || [])
+      .map((row) => ({
+        key: String(row?._id || "").trim(),
+        count: Number(row?.count || 0),
+        amount: Number(row?.amount || 0),
+      }))
+      .filter((row) => row.key);
+
+    const counts_by_key = breakdown.reduce((acc, row) => {
+      acc[row.key] = row.count;
+      return acc;
+    }, {});
 
     return res.json({
       success: true,
-      data: stats || {
-        total: 0,
-        total_amount: 0,
-        cash_count: 0,
-        supplier_count: 0,
-        fixed_count: 0,
+      data: {
+        total: Number(summary?.total || 0),
+        total_amount: Number(summary?.total_amount || 0),
+        breakdown,
+        counts_by_key,
       },
     });
   } catch (err) {
@@ -341,7 +462,9 @@ export const updateExpense = async (req, res) => {
 
     if (Array.isArray(items)) {
       const nextExpenseType = expense_type !== undefined ? expense_type : expense.expense_type;
-      if (!EXPENSE_TYPES.has(nextExpenseType)) {
+      const businessId = expense.businessId || businessFilter.businessId || req.body?.businessId;
+      const expenseRule = await resolveExpenseRule(req, businessId, nextExpenseType);
+      if (!expenseRule?.key) {
         return res.status(400).json({ message: "Invalid expense type" });
       }
 
@@ -358,19 +481,11 @@ export const updateExpense = async (req, res) => {
         return res.status(400).json({ message: "At least one valid expense item is required" });
       }
 
-      let nextFixedSource = "";
-      if (nextExpenseType === "fixed") {
-        nextFixedSource = fixed_source !== undefined ? fixed_source : expense.fixed_source || "cash";
-        if (!FIXED_SOURCES.has(nextFixedSource)) {
-          return res.status(400).json({ message: "Fixed source must be cash or supplier" });
-        }
-      }
+      let nextFixedSource = expenseRule.is_fixed ? (expenseRule.requires_supplier ? "supplier" : "cash") : "";
 
       let supplierObjectId = null;
       let supplierName = "";
-      const requiresSupplier =
-        nextExpenseType === "supplier" ||
-        (nextExpenseType === "fixed" && nextFixedSource === "supplier");
+      const requiresSupplier = expenseRule.requires_supplier;
 
       if (requiresSupplier) {
         const nextSupplierId = supplier_id || expense.supplier_id;
@@ -378,17 +493,36 @@ export const updateExpense = async (req, res) => {
           return res.status(400).json({ message: "Valid supplier is required" });
         }
         const supplier = await Supplier.findOne({ _id: nextSupplierId, ...businessFilter })
-          .select("_id name")
+          .select("_id name assigned_expense_items")
           .lean();
         if (!supplier) return res.status(404).json({ message: "Supplier not found" });
+
+        const validation = validateSupplierExpenseItems(supplier, normalizedItems);
+        if (!validation.ok) {
+          return res.status(400).json({
+            message: `Selected items are not assigned to this supplier: ${validation.invalidItems.join(", ")}`,
+          });
+        }
         supplierObjectId = supplier._id;
         supplierName = supplier.name;
+      }
+
+      if (expenseRule.is_fixed && expenseRule.key === "fixed") {
+        const fixedMeta = await resolveFixedExpenseMeta(businessFilter, normalizedItems);
+        if (!fixedMeta.ok) {
+          return res.status(400).json({ message: fixedMeta.message });
+        }
+        nextFixedSource = fixedMeta.fixedSource;
+        supplierObjectId = fixedMeta.supplierId && mongoose.Types.ObjectId.isValid(fixedMeta.supplierId)
+          ? new mongoose.Types.ObjectId(fixedMeta.supplierId)
+          : null;
+        supplierName = fixedMeta.supplierName || "";
       }
 
       let nextMonth = normalizeMonth(month || expense.month || "");
       let nextDate = expense.date;
 
-      if (nextExpenseType === "fixed") {
+      if (expenseRule.is_fixed) {
         if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(nextMonth)) {
           return res.status(400).json({ message: "Month must be in YYYY-MM format" });
         }
@@ -421,8 +555,8 @@ export const updateExpense = async (req, res) => {
       const summaryTitle = itemsCount > 1 ? `${itemsCount} items` : docs[0]?.item_name || "Expense";
       const avgRate = totalQuantity > 0 ? totalAmount / totalQuantity : totalAmount;
 
-      expense.expense_type = nextExpenseType;
-      expense.fixed_source = nextExpenseType === "fixed" ? nextFixedSource : "";
+      expense.expense_type = expenseRule.is_fixed ? "fixed" : expenseRule.key;
+      expense.fixed_source = nextFixedSource;
       expense.supplier_id = supplierObjectId;
       expense.supplier_name = supplierName;
       expense.date = nextDate;

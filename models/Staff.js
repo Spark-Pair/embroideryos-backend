@@ -9,8 +9,7 @@ const customerSchema = new mongoose.Schema(
     },
     category: {
       type: String,
-      enum: ["Embroidery", "Cropping"],
-      default: "Embroidery",
+      default: "",
       index: true,
     },
     joining_date: {
@@ -35,5 +34,7 @@ const customerSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+customerSchema.index({ businessId: 1, isActive: 1, category: 1, name: 1 });
 
 export default mongoose.model("Staff", customerSchema);

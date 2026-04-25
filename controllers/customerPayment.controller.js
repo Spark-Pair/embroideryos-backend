@@ -3,8 +3,7 @@ import CustomerPayment from "../models/CustomerPayment.js";
 import Customer from "../models/Customer.js";
 import Invoice from "../models/Invoice.js";
 import Order from "../models/Order.js";
-
-const PAYMENT_METHODS = new Set(["cash", "cheque", "slip", "online", "adjustment"]);
+import { getBusinessRuleContextByBusinessId, getCustomerPaymentMethodRule } from "../utils/businessRuleData.js";
 
 const normalizeMonth = (month) => (typeof month === "string" ? month.trim() : "");
 const normalizeText = (val) => (typeof val === "string" ? val.trim() : "");
@@ -25,29 +24,22 @@ const buildBusinessFilter = (req) => {
   return filter;
 };
 
-const validateByMethod = ({ method, referenceNo, bankName, partyName, chequeDate, clearDate }) => {
-  if (method === "online") {
-    if (!referenceNo) return "Reference number is required for online payments";
+const validateByMethod = ({ methodRule, method, referenceNo, bankName, partyName, chequeDate, clearDate }) => {
+  if (methodRule?.requires_reference && !referenceNo) {
+    return `Reference number is required for ${method} payments`;
   }
-
-  if (method === "cheque") {
-    if (!referenceNo) return "Reference number is required for cheque payments";
-    if (!bankName) return "Bank name is required for cheque payments";
-    if (!chequeDate) return "Cheque date is required for cheque payments";
-    if (clearDate && new Date(clearDate) < new Date(chequeDate)) {
-      return "Clear date must be greater than or equal to cheque date";
-    }
+  if (methodRule?.requires_bank && !bankName) {
+    return `Bank name is required for ${method} payments`;
   }
-
-  if (method === "slip") {
-    if (!referenceNo) return "Reference number is required for slip payments";
-    if (!partyName) return "Party name is required for slip payments";
-    if (!chequeDate) return "Slip date is required for slip payments";
-    if (clearDate && new Date(clearDate) < new Date(chequeDate)) {
-      return "Clear date must be greater than or equal to slip date";
-    }
+  if (methodRule?.requires_party && !partyName) {
+    return `Party name is required for ${method} payments`;
   }
-
+  if (methodRule?.requires_issue_date && !chequeDate) {
+    return `Issue date is required for ${method} payments`;
+  }
+  if (methodRule?.allows_clear_date && clearDate && chequeDate && new Date(clearDate) < new Date(chequeDate)) {
+    return "Clear date must be greater than or equal to issue date";
+  }
   return "";
 };
 
@@ -77,7 +69,7 @@ export const createCustomerPayment = async (req, res) => {
       return res.status(400).json({ message: "Month must be in YYYY-MM format" });
     }
 
-    if (!PAYMENT_METHODS.has(method)) {
+    if (!normalizeText(method)) {
       return res.status(400).json({ message: "Invalid payment method" });
     }
 
@@ -93,7 +85,16 @@ export const createCustomerPayment = async (req, res) => {
     const bankName = normalizeText(bank_name);
     const partyName = normalizeText(party_name);
 
+    const businessFilter = buildBusinessFilter(req);
+    const businessId = businessFilter.businessId || req.body.businessId;
+    if (!businessId) {
+      return res.status(400).json({ message: "businessId is required" });
+    }
+
+    const ruleContext = await getBusinessRuleContextByBusinessId(businessId);
+    const methodRule = getCustomerPaymentMethodRule(ruleContext, method);
     const methodError = validateByMethod({
+      methodRule,
       method,
       referenceNo,
       bankName,
@@ -103,12 +104,6 @@ export const createCustomerPayment = async (req, res) => {
     });
     if (methodError) {
       return res.status(400).json({ message: methodError });
-    }
-
-    const businessFilter = buildBusinessFilter(req);
-    const businessId = businessFilter.businessId || req.body.businessId;
-    if (!businessId) {
-      return res.status(400).json({ message: "businessId is required" });
     }
 
     const customerQuery = { _id: customer_id, ...businessFilter };
@@ -176,7 +171,7 @@ export const updateCustomerPayment = async (req, res) => {
       return res.status(400).json({ message: "Month must be in YYYY-MM format" });
     }
 
-    if (!PAYMENT_METHODS.has(method)) {
+    if (!normalizeText(method)) {
       return res.status(400).json({ message: "Invalid payment method" });
     }
 
@@ -192,7 +187,18 @@ export const updateCustomerPayment = async (req, res) => {
     const bankName = normalizeText(bank_name);
     const partyName = normalizeText(party_name);
 
+    const businessFilter = buildBusinessFilter(req);
+    const paymentQuery = { _id: id, ...businessFilter };
+    const payment = await CustomerPayment.findOne(paymentQuery);
+    if (!payment) {
+      return res.status(404).json({ message: "Customer payment not found" });
+    }
+
+    const businessId = payment.businessId || businessFilter.businessId;
+    const ruleContext = await getBusinessRuleContextByBusinessId(businessId);
+    const methodRule = getCustomerPaymentMethodRule(ruleContext, method);
     const methodError = validateByMethod({
+      methodRule,
       method,
       referenceNo,
       bankName,
@@ -202,13 +208,6 @@ export const updateCustomerPayment = async (req, res) => {
     });
     if (methodError) {
       return res.status(400).json({ message: methodError });
-    }
-
-    const businessFilter = buildBusinessFilter(req);
-    const paymentQuery = { _id: id, ...businessFilter };
-    const payment = await CustomerPayment.findOne(paymentQuery);
-    if (!payment) {
-      return res.status(404).json({ message: "Customer payment not found" });
     }
 
     const customerQuery = { _id: customer_id, ...businessFilter };
@@ -330,52 +329,51 @@ export const getCustomerPaymentStats = async (req, res) => {
   try {
     const filter = buildBusinessFilter(req);
 
-    const [stats] = await CustomerPayment.aggregate([
-      { $match: filter },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: 1 },
-          cash: {
-            $sum: {
-              $cond: [{ $eq: ["$method", "cash"] }, 1, 0],
-            },
+    const [summaryRows, breakdownRows] = await Promise.all([
+      CustomerPayment.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            total_amount: { $sum: "$amount" },
           },
-          cheque: {
-            $sum: {
-              $cond: [{ $eq: ["$method", "cheque"] }, 1, 0],
-            },
-          },
-          slip: {
-            $sum: {
-              $cond: [{ $eq: ["$method", "slip"] }, 1, 0],
-            },
-          },
-          online: {
-            $sum: {
-              $cond: [{ $eq: ["$method", "online"] }, 1, 0],
-            },
-          },
-          adjustment: {
-            $sum: {
-              $cond: [{ $eq: ["$method", "adjustment"] }, 1, 0],
-            },
-          },
-          total_amount: { $sum: "$amount" },
         },
-      },
+      ]),
+      CustomerPayment.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: "$method",
+            count: { $sum: 1 },
+            amount: { $sum: "$amount" },
+          },
+        },
+        { $sort: { count: -1, _id: 1 } },
+      ]),
     ]);
+
+    const summary = summaryRows?.[0] || {};
+    const breakdown = (breakdownRows || [])
+      .map((row) => ({
+        key: String(row?._id || "").trim(),
+        count: Number(row?.count || 0),
+        amount: Number(row?.amount || 0),
+      }))
+      .filter((row) => row.key);
+
+    const counts_by_key = breakdown.reduce((acc, row) => {
+      acc[row.key] = row.count;
+      return acc;
+    }, {});
 
     return res.json({
       success: true,
-      data: stats || {
-        total: 0,
-        cash: 0,
-        cheque: 0,
-        slip: 0,
-        online: 0,
-        adjustment: 0,
-        total_amount: 0,
+      data: {
+        total: Number(summary?.total || 0),
+        total_amount: Number(summary?.total_amount || 0),
+        breakdown,
+        counts_by_key,
       },
     });
   } catch (err) {

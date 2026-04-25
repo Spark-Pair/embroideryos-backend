@@ -2,18 +2,28 @@ import mongoose from "mongoose";
 import Supplier from "../models/Supplier.js";
 import Expense from "../models/Expense.js";
 import SupplierPayment from "../models/SupplierPayment.js";
+import ExpenseItem from "../models/ExpenseItem.js";
 
 const parseOpeningBalance = (value) => {
   if (value === undefined || value === null || value === "") return 0;
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
 };
-const normalizeAssignedExpenseItems = (value) => {
+const normalizeAssignedExpenseItems = (value, allowedNames = null) => {
   if (!Array.isArray(value)) return [];
-  const cleaned = value
-    .map((v) => String(v || "").trim())
-    .filter(Boolean);
-  return Array.from(new Set(cleaned));
+
+  const allowedMap = allowedNames instanceof Map ? allowedNames : null;
+  const seen = new Set();
+
+  return value.reduce((acc, rawValue) => {
+    const cleaned = String(rawValue || "").trim();
+    const key = cleaned.toLowerCase();
+    if (!cleaned || seen.has(key)) return acc;
+    if (allowedMap && !allowedMap.has(key)) return acc;
+    seen.add(key);
+    acc.push(allowedMap?.get(key) || cleaned);
+    return acc;
+  }, []);
 };
 
 const buildBusinessFilter = (req, businessId) => {
@@ -24,6 +34,33 @@ const buildBusinessFilter = (req, businessId) => {
     return { businessId: new mongoose.Types.ObjectId(businessId) };
   }
   return {};
+};
+
+const resolveBusinessId = (req, businessId) => {
+  const filter = buildBusinessFilter(req, businessId);
+  return filter.businessId || (businessId && mongoose.Types.ObjectId.isValid(businessId) ? new mongoose.Types.ObjectId(businessId) : null);
+};
+
+const getAssignableExpenseItemMap = async (businessId) => {
+  if (!businessId) return new Map();
+
+  const rows = await ExpenseItem.find({
+    businessId,
+    $or: [
+      { fixed_source: { $exists: false } },
+      { fixed_source: "" },
+    ],
+  })
+    .select("name")
+    .lean();
+
+  return rows.reduce((acc, row) => {
+    const name = String(row?.name || "").trim();
+    if (!name) return acc;
+    const key = name.toLowerCase();
+    if (!acc.has(key)) acc.set(key, name);
+    return acc;
+  }, new Map());
 };
 
 const toId = (value) => String(value);
@@ -77,12 +114,14 @@ export const createSupplier = async (req, res) => {
     const { name, opening_balance, assigned_expense_items } = req.body;
 
     if (!name?.trim()) return res.status(400).json({ message: "Name is required" });
+    const businessId = resolveBusinessId(req, req.body.businessId);
+    const allowedExpenseItems = await getAssignableExpenseItemMap(businessId);
 
     const supplier = await Supplier.create({
       name: name.trim(),
       opening_balance: parseOpeningBalance(opening_balance),
-      assigned_expense_items: normalizeAssignedExpenseItems(assigned_expense_items),
-      businessId: req.body.businessId,
+      assigned_expense_items: normalizeAssignedExpenseItems(assigned_expense_items, allowedExpenseItems),
+      businessId,
     });
 
     return res.status(201).json({ success: true, supplier });
@@ -178,7 +217,8 @@ export const updateSupplier = async (req, res) => {
       supplier.opening_balance = parseOpeningBalance(opening_balance);
     }
     if (assigned_expense_items !== undefined) {
-      supplier.assigned_expense_items = normalizeAssignedExpenseItems(assigned_expense_items);
+      const allowedExpenseItems = await getAssignableExpenseItemMap(supplier.businessId || resolveBusinessId(req, req.body.businessId));
+      supplier.assigned_expense_items = normalizeAssignedExpenseItems(assigned_expense_items, allowedExpenseItems);
     }
 
     await supplier.save();

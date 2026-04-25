@@ -18,7 +18,6 @@ const supplierPaymentSchema = new mongoose.Schema(
     },
     method: {
       type: String,
-      enum: ["cash", "cheque", "online", "goods_return"],
       required: true,
       index: true,
     },
@@ -36,5 +35,7 @@ const supplierPaymentSchema = new mongoose.Schema(
 );
 
 supplierPaymentSchema.index({ businessId: 1, date: -1, createdAt: -1 });
+supplierPaymentSchema.index({ businessId: 1, supplier_id: 1, date: -1 });
+supplierPaymentSchema.index({ businessId: 1, month: 1, supplier_id: 1 });
 
 export default mongoose.model("SupplierPayment", supplierPaymentSchema);

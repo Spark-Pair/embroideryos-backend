@@ -4,12 +4,8 @@ import Staff from "../models/Staff.js";
 import CrpRateConfig from "../models/CrpRateConfig.js";
 import CrpStaffRecord from "../models/CrpStaffRecord.js";
 
-const CATEGORIES = new Set(["Press", "Cropping", "Other"]);
-
 const normalizeCategory = (value) => {
-  const category = String(value || "").trim();
-  if (category === "Packing") return "Cropping";
-  return category;
+  return String(value || "").trim();
 };
 
 const toNum = (value) => {
@@ -49,7 +45,7 @@ export const createCrpStaffRecord = async (req, res) => {
     if (!staff_id || !mongoose.Types.ObjectId.isValid(staff_id)) {
       return res.status(400).json({ message: "Valid staff is required" });
     }
-    if (!CATEGORIES.has(category)) {
+    if (!category) {
       return res.status(400).json({ message: "Invalid category" });
     }
     if (!type_name?.trim()) {
@@ -71,9 +67,6 @@ export const createCrpStaffRecord = async (req, res) => {
 
     if (shouldResolveOrder && !order) return res.status(404).json({ message: "Order not found" });
     if (!staff) return res.status(404).json({ message: "Staff not found" });
-    if (staff.category !== "Cropping") {
-      return res.status(400).json({ message: "Selected staff is not in Cropping category" });
-    }
     if (!rateConfig) {
       return res.status(404).json({ message: "CRP category/type config not found or inactive" });
     }
@@ -154,7 +147,7 @@ export const updateCrpStaffRecord = async (req, res) => {
     const nextCategory = category || existing.category;
     const nextTypeName = (type_name || existing.type_name || "").trim();
 
-    if (!CATEGORIES.has(nextCategory)) {
+    if (!nextCategory) {
       return res.status(400).json({ message: "Invalid category" });
     }
     if (!nextTypeName) {
@@ -182,9 +175,6 @@ export const updateCrpStaffRecord = async (req, res) => {
 
     if (resolvedOrderId && !order) return res.status(404).json({ message: "Order not found" });
     if (!staff) return res.status(404).json({ message: "Staff not found" });
-    if (staff.category !== "Cropping") {
-      return res.status(400).json({ message: "Selected staff is not in Cropping category" });
-    }
     if (!rateConfig) {
       return res.status(404).json({ message: "CRP category/type config not found or inactive" });
     }
@@ -257,7 +247,7 @@ export const getCrpStaffRecords = async (req, res) => {
     if (staff_id && mongoose.Types.ObjectId.isValid(staff_id)) {
       filter.staff_id = new mongoose.Types.ObjectId(staff_id);
     }
-    if (normalizedCategory && CATEGORIES.has(normalizedCategory)) filter.category = normalizedCategory;
+    if (normalizedCategory) filter.category = normalizedCategory;
     if (type_name?.trim()) filter.type_name = { $regex: type_name.trim(), $options: "i" };
 
     if (date_from || date_to) {

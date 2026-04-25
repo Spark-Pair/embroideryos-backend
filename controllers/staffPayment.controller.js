@@ -2,9 +2,8 @@ import mongoose from "mongoose";
 import StaffPayment from "../models/StaffPayment.js";
 import Staff from "../models/Staff.js";
 
-const PAYMENT_TYPES = new Set(["advance", "payment", "adjustment"]);
-
 const normalizeMonth = (month) => (typeof month === "string" ? month.trim() : "");
+const normalizeText = (value) => (typeof value === "string" ? value.trim() : "");
 
 const buildBusinessFilter = (req) => {
   const filter = {};
@@ -37,7 +36,7 @@ export const createStaffPayment = async (req, res) => {
       return res.status(400).json({ message: "Month must be in YYYY-MM format" });
     }
 
-    if (!PAYMENT_TYPES.has(type)) {
+    if (!normalizeText(type)) {
       return res.status(400).json({ message: "Invalid payment type" });
     }
 
@@ -64,7 +63,7 @@ export const createStaffPayment = async (req, res) => {
       staff_id,
       date: new Date(date),
       month: normalizedMonth,
-      type,
+      type: normalizeText(type),
       amount,
       remarks: typeof remarks === "string" ? remarks.trim() : remarks,
       businessId,
@@ -97,8 +96,8 @@ export const getStaffPayments = async (req, res) => {
       filter.staff_id = new mongoose.Types.ObjectId(staff_id);
     }
 
-    if (type && PAYMENT_TYPES.has(type)) {
-      filter.type = type;
+    if (type && normalizeText(type)) {
+      filter.type = normalizeText(type);
     }
 
     const normalizedMonth = normalizeMonth(month);
@@ -163,58 +162,57 @@ export const getStaffPaymentStats = async (req, res) => {
   try {
     const filter = buildBusinessFilter(req);
 
-    const [stats] = await StaffPayment.aggregate([
-      { $match: filter },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: 1 },
-          advance: {
-            $sum: {
-              $cond: [{ $eq: ["$type", "advance"] }, 1, 0],
-            },
-          },
-          payment: {
-            $sum: {
-              $cond: [{ $eq: ["$type", "payment"] }, 1, 0],
-            },
-          },
-          adjustment: {
-            $sum: {
-              $cond: [{ $eq: ["$type", "adjustment"] }, 1, 0],
-            },
-          },
-          total_amount: { $sum: "$amount" },
-          total_advance_amount: {
-            $sum: {
-              $cond: [{ $eq: ["$type", "advance"] }, "$amount", 0],
-            },
-          },
-          total_payment_amount: {
-            $sum: {
-              $cond: [{ $eq: ["$type", "payment"] }, "$amount", 0],
-            },
-          },
-          total_adjustment_amount: {
-            $sum: {
-              $cond: [{ $eq: ["$type", "adjustment"] }, "$amount", 0],
-            },
+    const [summaryRows, breakdownRows] = await Promise.all([
+      StaffPayment.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            total_amount: { $sum: "$amount" },
           },
         },
-      },
+      ]),
+      StaffPayment.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: "$type",
+            count: { $sum: 1 },
+            amount: { $sum: "$amount" },
+          },
+        },
+        { $sort: { count: -1, _id: 1 } },
+      ]),
     ]);
+
+    const summary = summaryRows?.[0] || {};
+    const breakdown = (breakdownRows || [])
+      .map((row) => ({
+        key: String(row?._id || "").trim(),
+        count: Number(row?.count || 0),
+        amount: Number(row?.amount || 0),
+      }))
+      .filter((row) => row.key);
+
+    const counts_by_key = breakdown.reduce((acc, row) => {
+      acc[row.key] = row.count;
+      return acc;
+    }, {});
+
+    const amounts_by_key = breakdown.reduce((acc, row) => {
+      acc[row.key] = row.amount;
+      return acc;
+    }, {});
 
     return res.json({
       success: true,
-      data: stats || {
-        total: 0,
-        advance: 0,
-        payment: 0,
-        adjustment: 0,
-        total_amount: 0,
-        total_advance_amount: 0,
-        total_payment_amount: 0,
-        total_adjustment_amount: 0,
+      data: {
+        total: Number(summary?.total || 0),
+        total_amount: Number(summary?.total_amount || 0),
+        breakdown,
+        counts_by_key,
+        amounts_by_key,
       },
     });
   } catch (err) {

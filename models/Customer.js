@@ -31,4 +31,6 @@ const customerSchema = new mongoose.Schema(
   }
 );
 
+customerSchema.index({ businessId: 1, isActive: 1, name: 1 });
+
 export default mongoose.model("Customer", customerSchema);
