@@ -24,6 +24,15 @@ const customerSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    allowance_overrides: {
+      type: [
+        {
+          month: { type: String, required: true, trim: true },
+          mode: { type: String, enum: ["force_add", "force_remove"], required: true },
+        },
+      ],
+      default: [],
+    },
     isActive: {
       type: Boolean,
       default: true,

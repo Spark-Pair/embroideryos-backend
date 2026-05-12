@@ -7,6 +7,7 @@ import SupplierPayment from "../models/SupplierPayment.js";
 import StaffPayment from "../models/StaffPayment.js";
 import StaffRecord from "../models/StaffRecord.js";
 import CrpStaffRecord from "../models/CrpStaffRecord.js";
+import ProductionConfig from "../models/ProductionConfig.js";
 import Customer from "../models/Customer.js";
 import Supplier from "../models/Supplier.js";
 import Staff from "../models/Staff.js";
@@ -17,6 +18,11 @@ import {
   getStaffPaymentTypeRule,
   isAllowanceEligibleWithRule,
 } from "../utils/businessRuleData.js";
+import {
+  ALLOWANCE_OVERRIDE_MODES,
+  normalizeAllowanceOverrides,
+  resolveAllowanceAmount,
+} from "../utils/allowanceOverride.js";
 
 const MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
 const RECENT_ORDER_FIELDS = "_id date customer_name description total_amount";
@@ -79,6 +85,34 @@ const buildBusinessFilter = (req) => {
   }
 
   return {};
+};
+
+const buildAllowanceAmountByMonth = async (monthKeys = [], businessId = null) => {
+  const uniqueMonths = [...new Set(monthKeys.filter((item) => MONTH_REGEX.test(item)))];
+  if (!uniqueMonths.length) return {};
+
+  const entries = await Promise.all(
+    uniqueMonths.map(async (monthKey) => {
+      const { to } = monthRange(monthKey);
+      const filter = {
+        $or: [
+          { effective_date: { $lte: to } },
+          { effective_date: null },
+        ],
+      };
+      if (businessId && mongoose.Types.ObjectId.isValid(businessId)) {
+        filter.businessId = new mongoose.Types.ObjectId(businessId);
+      }
+      const config = await ProductionConfig.findOne(filter)
+        .sort({ effective_date: -1, createdAt: -1 })
+        .select("allowance")
+        .lean();
+      const allowance = Number(config?.allowance);
+      return [monthKey, Number.isFinite(allowance) ? allowance : 0];
+    })
+  );
+
+  return Object.fromEntries(entries);
 };
 
 const aggregateCountAndAmount = async (Model, dateField, amountField, baseMatch, from, to) => {
@@ -572,7 +606,7 @@ const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, sele
     ...businessMatch,
     category: "Embroidery",
   })
-    .select("_id name opening_balance isActive")
+    .select("_id name opening_balance isActive allowance_overrides")
     .lean();
 
   if (!staffs.length) {
@@ -596,6 +630,10 @@ const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, sele
   }
 
   const staffIds = staffs.map((staff) => staff._id);
+  const staffById = new Map(staffs.map((staff) => [String(staff._id), staff]));
+  const overrideMonths = staffs.flatMap((staff) =>
+    normalizeAllowanceOverrides(staff?.allowance_overrides).map((item) => item.month)
+  );
 
   const [records, payments] = await Promise.all([
     StaffRecord.find({
@@ -613,6 +651,13 @@ const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, sele
       .select("staff_id date month type amount")
       .lean(),
   ]);
+  const historyMonths = records
+    .map((rec) => getMonthKeyFromDate(rec?.date))
+    .filter((monthKey) => monthKey && monthKey <= selectedMonth);
+  const allowanceAmountByMonth = await buildAllowanceAmountByMonth(
+    [...historyMonths, ...overrideMonths, selectedMonth],
+    businessMatch?.businessId
+  );
 
   const summaryByStaff = new Map(
     staffs.map((staff) => [
@@ -694,13 +739,30 @@ const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, sele
     const current = summaryByStaff.get(row.staffId);
     if (!current) return;
     current.arrears += Number(row.finalAmount || 0);
-    if (isAllowanceEligibleWithRule({
-      record_count: row.recordCount,
-      absent_count: row.absentCount,
-      half_count: row.halfCount,
-    }, ruleContext)) {
-      current.arrears += Number(row.allowanceCandidate ?? 0);
-    }
+    current.arrears += resolveAllowanceAmount({
+      staff: staffById.get(row.staffId),
+      month: row.monthKey,
+      allowance:
+        Number.isFinite(Number(row.allowanceCandidate))
+          ? Number(row.allowanceCandidate)
+          : Number(allowanceAmountByMonth[row.monthKey] || 0),
+      isEligible: isAllowanceEligibleWithRule({
+        record_count: row.recordCount,
+        absent_count: row.absentCount,
+        half_count: row.halfCount,
+      }, ruleContext),
+    });
+  });
+
+  staffs.forEach((staff) => {
+    normalizeAllowanceOverrides(staff?.allowance_overrides).forEach((override) => {
+      if (override.mode !== ALLOWANCE_OVERRIDE_MODES.FORCE_ADD) return;
+      if (!override.month || override.month >= selectedMonth) return;
+      if (historyMonthStats.has(`${String(staff._id)}::${override.month}`)) return;
+      const current = summaryByStaff.get(String(staff._id));
+      if (!current) return;
+      current.arrears += Number(allowanceAmountByMonth[override.month] || 0);
+    });
   });
 
   payments.forEach((payment) => {
@@ -752,13 +814,19 @@ const calculateStaffMonthlySummary = async ({ businessMatch, selectedMonth, sele
     if (row.currentRecordCount > 0) {
       staffWithRecords += 1;
     }
-    row.currentAllowance = isAllowanceEligibleWithRule({
-      record_count: row.currentRecordCount,
-      absent_count: row.currentAbsent,
-      half_count: row.currentHalf,
-    }, ruleContext)
-      ? Number(row.currentAllowanceCandidate ?? 0)
-      : 0;
+    row.currentAllowance = resolveAllowanceAmount({
+      staff: staffById.get(row.staff_id),
+      month: selectedMonth,
+      allowance:
+        Number.isFinite(Number(row.currentAllowanceCandidate))
+          ? Number(row.currentAllowanceCandidate)
+          : Number(allowanceAmountByMonth[selectedMonth] || 0),
+      isEligible: isAllowanceEligibleWithRule({
+        record_count: row.currentRecordCount,
+        absent_count: row.currentAbsent,
+        half_count: row.currentHalf,
+      }, ruleContext),
+    });
 
     const workAmount = row.currentFinal - row.currentBonusAmt;
     const startingBalance = row.arrears + row.currentFinal + row.currentAllowance;

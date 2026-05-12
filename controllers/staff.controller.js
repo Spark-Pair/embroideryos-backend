@@ -4,6 +4,7 @@ import StaffRecord from "../models/StaffRecord.js";
 import StaffPayment from "../models/StaffPayment.js";
 import CrpStaffRecord from "../models/CrpStaffRecord.js";
 import { applyPaymentEffect, getBusinessRuleContextByBusinessId, getStaffPaymentTypeRule } from "../utils/businessRuleData.js";
+import { normalizeAllowanceOverrides } from "../utils/allowanceOverride.js";
 
 const parseOpeningBalance = (value) => {
   if (value === undefined || value === null || value === "") return 0;
@@ -85,7 +86,7 @@ const attachStaffCurrentBalance = async (staffs, businessFilter = {}) => {
 // CREATE Staff
 export const createStaff = async (req, res) => {
   try {
-    const { name, category, joining_date, salary, opening_balance } = req.body;
+    const { name, category, joining_date, salary, opening_balance, allowance_overrides } = req.body;
     const businessFilter = buildBusinessFilter(req, false);
     if (!businessFilter) {
       return res.status(400).json({ message: "Valid businessId is required" });
@@ -97,6 +98,7 @@ export const createStaff = async (req, res) => {
       joining_date,
       salary,
       opening_balance: parseOpeningBalance(opening_balance),
+      allowance_overrides: normalizeAllowanceOverrides(allowance_overrides),
       businessId: businessFilter.businessId,
     });
 
@@ -247,7 +249,7 @@ export const getStaff = async (req, res) => {
 // UPDATE staff
 export const updateStaff = async (req, res) => {
   try {
-    const { category, joining_date, salary, opening_balance } = req.body;
+    const { category, joining_date, salary, opening_balance, allowance_overrides } = req.body;
     const businessFilter = buildBusinessFilter(req);
     if (!businessFilter) {
       return res.status(400).json({ message: "Invalid businessId" });
@@ -261,6 +263,9 @@ export const updateStaff = async (req, res) => {
     staff.salary = salary ?? staff.salary;
     if (opening_balance !== undefined) {
       staff.opening_balance = parseOpeningBalance(opening_balance);
+    }
+    if (allowance_overrides !== undefined) {
+      staff.allowance_overrides = normalizeAllowanceOverrides(allowance_overrides);
     }
 
     await staff.save();
