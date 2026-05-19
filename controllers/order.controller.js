@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import Customer from "../models/Customer.js";
 import Order from "../models/Order.js";
-import ProductionConfig from "../models/ProductionConfig.js";
+import OrderConfig from "../models/OrderConfig.js";
 
 function toNum(val) {
   if (val === "" || val == null) return 0;
@@ -117,7 +117,7 @@ async function getOrderFormulaConfig(date, businessFilter = {}) {
   let config = null;
   const d = date ? new Date(date) : null;
   if (d && !Number.isNaN(d.getTime())) {
-    config = await ProductionConfig.findOne({
+    config = await OrderConfig.findOne({
       ...query,
       effective_date: { $lte: d },
     })
@@ -125,7 +125,7 @@ async function getOrderFormulaConfig(date, businessFilter = {}) {
       .lean();
   }
   if (!config) {
-    config = await ProductionConfig.findOne(query)
+    config = await OrderConfig.findOne(query)
       .sort({ effective_date: -1, createdAt: -1 })
       .lean();
   }
@@ -249,7 +249,7 @@ export const createOrder = async (req, res) => {
     const payload = await buildOrderPayload(req.body, businessFilter);
     const order = await Order.create({
       ...payload,
-      businessId: req.body.businessId,
+      businessId: businessFilter.businessId || req.body.businessId,
     });
 
     return res.status(201).json({ success: true, data: order });

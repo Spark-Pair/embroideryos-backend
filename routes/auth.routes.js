@@ -15,7 +15,7 @@ const router = express.Router();
 
 router.post('/login', login);
 router.post('/refresh', refreshToken);
-router.post('/logout', authenticate, logout);
+router.post('/logout', logout);
 router.post('/logout-all', authenticate, logoutAll);
 router.get('/me', authenticate, me);
 router.patch('/shortcuts', authenticate, updateMyShortcuts);

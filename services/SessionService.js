@@ -3,6 +3,8 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 
 class SessionService {
+  static LAST_ACTIVITY_THROTTLE_MS = 60 * 1000;
+
   // Generate unique session ID
   static generateSessionId() {
     return crypto.randomBytes(32).toString('hex');
@@ -41,7 +43,7 @@ class SessionService {
     const activeSession = await Session.findOne({ 
       userId, 
       valid: true 
-    }).select('sessionId createdAt');
+    }).select('sessionId createdAt').lean();
     
     return activeSession;
   }
@@ -51,13 +53,17 @@ class SessionService {
     const session = await Session.findOne({ 
       sessionId, 
       valid: true 
-    });
+    }).select('_id userId sessionId lastActivity');
     
     if (!session) return null;
 
-    // Update last activity
-    session.lastActivity = new Date();
-    await session.save();
+    const lastActivityTs = session.lastActivity ? new Date(session.lastActivity).getTime() : 0;
+    if (!lastActivityTs || Date.now() - lastActivityTs >= this.LAST_ACTIVITY_THROTTLE_MS) {
+      Session.updateOne(
+        { _id: session._id, valid: true },
+        { $set: { lastActivity: new Date() } }
+      ).catch(() => null);
+    }
 
     return session;
   }

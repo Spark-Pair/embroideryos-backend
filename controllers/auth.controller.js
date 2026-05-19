@@ -294,7 +294,14 @@ export const refreshToken = async (req, res) => {
 /* LOGOUT */
 export const logout = async (req, res) => {
   try {
-    const { sessionId } = req;
+    const sessionId =
+      req.sessionId ||
+      req.body?.sessionId ||
+      req.headers['x-session-id'];
+
+    if (!sessionId) {
+      return res.status(400).json({ message: 'Session ID is required' });
+    }
 
     await SessionService.invalidateSession(sessionId);
 
