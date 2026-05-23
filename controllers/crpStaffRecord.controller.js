@@ -67,6 +67,9 @@ export const createCrpStaffRecord = async (req, res) => {
 
     if (shouldResolveOrder && !order) return res.status(404).json({ message: "Order not found" });
     if (!staff) return res.status(404).json({ message: "Staff not found" });
+    if (String(staff.category || "").toLowerCase() !== "cropping") {
+      return res.status(400).json({ message: "CRP records can only be created for cropping staff" });
+    }
     if (!rateConfig) {
       return res.status(404).json({ message: "CRP category/type config not found or inactive" });
     }
@@ -175,6 +178,9 @@ export const updateCrpStaffRecord = async (req, res) => {
 
     if (resolvedOrderId && !order) return res.status(404).json({ message: "Order not found" });
     if (!staff) return res.status(404).json({ message: "Staff not found" });
+    if (String(staff.category || "").toLowerCase() !== "cropping") {
+      return res.status(400).json({ message: "CRP records can only be saved for cropping staff" });
+    }
     if (!rateConfig) {
       return res.status(404).json({ message: "CRP category/type config not found or inactive" });
     }

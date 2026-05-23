@@ -1,24 +1,9 @@
-import 'dotenv/config';
-import express from 'express';
 import dotenv from 'dotenv';
+dotenv.config();
+
+import express from 'express';
 import cors from 'cors';
 import connectDB from './config/db.js';
-
-dotenv.config();
-connectDB();
-
-const app = express();
-
-app.use(cors({
-  origin: process.env.FRONTEND_URL ?? 'http://localhost:5173',
-  credentials: true,
-}));
-
-app.use(express.json({ limit: '10mb' }));
-
-app.get('/', (req, res) => {
-  res.send('EmbroideryOS backend is running');
-});
 
 import authMiddleware from './middlewares/auth.js';
 import subscriptionMiddleware from './middlewares/subscription.js';
@@ -43,10 +28,40 @@ import orderRoutes from './routes/order.routes.js';
 import invoiceRoutes from './routes/invoice.routes.js';
 import customerPaymentRoutes from './routes/customerPayment.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
-import subscriptionRoutes from "./routes/subscription.routes.js";
-import subscriptionPaymentRoutes from "./routes/subscriptionPayment.routes.js";
+import subscriptionRoutes from './routes/subscription.routes.js';
+import subscriptionPaymentRoutes from './routes/subscriptionPayment.routes.js';
 
-app.use('/api/auth', authRoutes); // login, logout, register
+const app = express();
+
+connectDB();
+
+const allowedOrigins = [
+  ...(process.env.FRONTEND_URL || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+];
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`CORS blocked origin: ${origin}`));
+  },
+  credentials: true,
+}));
+
+app.use(express.json({ limit: '10mb' }));
+
+app.get('/', (req, res) => {
+  res.send('EmbroideryOS backend is running');
+});
+
+app.use('/api/auth', authRoutes);
 
 app.use('/api/businesses', authMiddleware, businessRoutes);
 app.use('/api/users', authMiddleware, userRoutes);
@@ -66,8 +81,11 @@ app.use('/api/orders', authMiddleware, subscriptionMiddleware, allowedRoles(['ad
 app.use('/api/invoices', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff'], { accessKey: 'invoices' }), invoiceRoutes);
 app.use('/api/customer-payments', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff'], { accessKey: 'customer_payments' }), customerPaymentRoutes);
 app.use('/api/dashboard', authMiddleware, subscriptionMiddleware, allowedRoles(['admin', 'staff'], { accessKey: 'dashboard' }), dashboardRoutes);
-app.use("/api/subscriptions", authMiddleware, subscriptionRoutes);
-app.use("/api/subscription-payments", authMiddleware, subscriptionPaymentRoutes);
+app.use('/api/subscriptions', authMiddleware, subscriptionRoutes);
+app.use('/api/subscription-payments', authMiddleware, subscriptionPaymentRoutes);
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
