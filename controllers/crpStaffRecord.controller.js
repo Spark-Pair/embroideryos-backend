@@ -13,6 +13,11 @@ const toNum = (value) => {
   return Number.isFinite(num) ? num : 0;
 };
 
+const normalizeMonth = (value) => {
+  const month = String(value || "").trim();
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : "";
+};
+
 const buildBusinessFilter = (req, businessId) => {
   if (req.user?.role !== "developer") {
     return req.user?.businessId
@@ -35,6 +40,7 @@ export const createCrpStaffRecord = async (req, res) => {
       type_name,
       rate,
       quantity_dzn,
+      month,
     } = req.body;
     const category = normalizeCategory(req.body.category);
 
@@ -98,7 +104,7 @@ export const createCrpStaffRecord = async (req, res) => {
     }
 
     const totalAmount = resolvedQtyDzn * resolvedRate;
-    const month = resolvedDate.toISOString().slice(0, 7);
+    const recordMonth = normalizeMonth(month) || resolvedDate.toISOString().slice(0, 7);
 
     const record = await CrpStaffRecord.create({
       order_id: order?._id || null,
@@ -111,7 +117,7 @@ export const createCrpStaffRecord = async (req, res) => {
       type_name: type_name.trim(),
       rate: resolvedRate,
       total_amount: totalAmount,
-      month,
+      month: recordMonth,
       businessId,
     });
 
@@ -133,6 +139,7 @@ export const updateCrpStaffRecord = async (req, res) => {
       type_name,
       rate,
       quantity_dzn,
+      month,
     } = req.body;
     const category = normalizeCategory(req.body.category);
 
@@ -209,7 +216,7 @@ export const updateCrpStaffRecord = async (req, res) => {
     }
 
     const totalAmount = resolvedQtyDzn * resolvedRate;
-    const month = resolvedDate.toISOString().slice(0, 7);
+    const recordMonth = normalizeMonth(month) || resolvedDate.toISOString().slice(0, 7);
 
     existing.order_id = order?._id || null;
     existing.order_date = resolvedDate;
@@ -221,7 +228,7 @@ export const updateCrpStaffRecord = async (req, res) => {
     existing.type_name = nextTypeName;
     existing.rate = resolvedRate;
     existing.total_amount = totalAmount;
-    existing.month = month;
+    existing.month = recordMonth;
 
     await existing.save();
 
