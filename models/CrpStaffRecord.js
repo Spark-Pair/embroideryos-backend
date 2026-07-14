@@ -11,6 +11,7 @@ const crpStaffRecordSchema = new mongoose.Schema(
     },
     order_date: { type: Date, required: true, index: true },
     order_description: { type: String, default: "", trim: true },
+    is_two_side: { type: Boolean, default: false },
     quantity_dzn: { type: Number, required: true, min: 0 },
 
     staff_id: {

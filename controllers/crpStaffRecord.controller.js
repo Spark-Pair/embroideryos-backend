@@ -18,6 +18,8 @@ const normalizeMonth = (value) => {
   return /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : "";
 };
 
+const normalizeBool = (value) => value === true || value === "true" || value === "1" || value === 1;
+
 const buildBusinessFilter = (req, businessId) => {
   if (req.user?.role !== "developer") {
     return req.user?.businessId
@@ -41,6 +43,7 @@ export const createCrpStaffRecord = async (req, res) => {
       rate,
       quantity_dzn,
       month,
+      is_two_side,
     } = req.body;
     const category = normalizeCategory(req.body.category);
 
@@ -90,11 +93,11 @@ export const createCrpStaffRecord = async (req, res) => {
       ? (order.unit === "Pcs" ? toNum(order.quantity) / 12 : toNum(order.quantity))
       : 0;
 
-    const resolvedQtyDzn = quantity_dzn === undefined || quantity_dzn === null || quantity_dzn === ""
+    const baseQtyDzn = quantity_dzn === undefined || quantity_dzn === null || quantity_dzn === ""
       ? (order ? orderQtyDzn : 0)
       : toNum(quantity_dzn);
 
-    if (resolvedQtyDzn <= 0) {
+    if (baseQtyDzn <= 0) {
       return res.status(400).json({ message: "Quantity in dozen must be greater than 0" });
     }
 
@@ -103,6 +106,8 @@ export const createCrpStaffRecord = async (req, res) => {
       return res.status(400).json({ message: "Rate must be greater than 0" });
     }
 
+    const isTwoSide = normalizeBool(is_two_side);
+    const resolvedQtyDzn = isTwoSide ? baseQtyDzn * 2 : baseQtyDzn;
     const totalAmount = resolvedQtyDzn * resolvedRate;
     const recordMonth = normalizeMonth(month) || resolvedDate.toISOString().slice(0, 7);
 
@@ -110,6 +115,7 @@ export const createCrpStaffRecord = async (req, res) => {
       order_id: order?._id || null,
       order_date: resolvedDate,
       order_description: (order_description ?? order?.description ?? "").trim(),
+      is_two_side: isTwoSide,
       quantity_dzn: resolvedQtyDzn,
       staff_id: staff._id,
       staff_name: staff.name,
@@ -140,6 +146,7 @@ export const updateCrpStaffRecord = async (req, res) => {
       rate,
       quantity_dzn,
       month,
+      is_two_side,
     } = req.body;
     const category = normalizeCategory(req.body.category);
 
@@ -202,11 +209,12 @@ export const updateCrpStaffRecord = async (req, res) => {
       ? (order.unit === "Pcs" ? toNum(order.quantity) / 12 : toNum(order.quantity))
       : 0;
 
-    const resolvedQtyDzn = quantity_dzn === undefined || quantity_dzn === null || quantity_dzn === ""
-      ? (order ? orderQtyDzn : toNum(existing.quantity_dzn))
+    const existingBaseQtyDzn = existing.is_two_side ? toNum(existing.quantity_dzn) / 2 : toNum(existing.quantity_dzn);
+    const baseQtyDzn = quantity_dzn === undefined || quantity_dzn === null || quantity_dzn === ""
+      ? (order ? orderQtyDzn : existingBaseQtyDzn)
       : toNum(quantity_dzn);
 
-    if (resolvedQtyDzn <= 0) {
+    if (baseQtyDzn <= 0) {
       return res.status(400).json({ message: "Quantity in dozen must be greater than 0" });
     }
 
@@ -215,12 +223,15 @@ export const updateCrpStaffRecord = async (req, res) => {
       return res.status(400).json({ message: "Rate must be greater than 0" });
     }
 
+    const isTwoSide = is_two_side === undefined ? Boolean(existing.is_two_side) : normalizeBool(is_two_side);
+    const resolvedQtyDzn = isTwoSide ? baseQtyDzn * 2 : baseQtyDzn;
     const totalAmount = resolvedQtyDzn * resolvedRate;
     const recordMonth = normalizeMonth(month) || resolvedDate.toISOString().slice(0, 7);
 
     existing.order_id = order?._id || null;
     existing.order_date = resolvedDate;
     existing.order_description = (order_description ?? order?.description ?? existing.order_description ?? "").trim();
+    existing.is_two_side = isTwoSide;
     existing.quantity_dzn = resolvedQtyDzn;
     existing.staff_id = staff._id;
     existing.staff_name = staff.name;
