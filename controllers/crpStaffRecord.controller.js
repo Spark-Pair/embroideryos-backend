@@ -248,6 +248,7 @@ export const getCrpStaffRecords = async (req, res) => {
       staff_id,
       category,
       type_name,
+      description,
       date_from,
       date_to,
       businessId,
@@ -262,6 +263,7 @@ export const getCrpStaffRecords = async (req, res) => {
     }
     if (normalizedCategory) filter.category = normalizedCategory;
     if (type_name?.trim()) filter.type_name = { $regex: type_name.trim(), $options: "i" };
+    if (description?.trim()) filter.order_description = { $regex: description.trim(), $options: "i" };
 
     if (date_from || date_to) {
       filter.order_date = {};
