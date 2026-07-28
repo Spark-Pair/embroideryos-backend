@@ -29,6 +29,11 @@ export const getProductionConfig = async (req, res) => {
       return res.status(400).json({ message: "Invalid businessId" });
     }
 
+    if (String(req.query?.all || "").toLowerCase() === "true") {
+      const configs = await ProductionConfig.find(query).sort({ effective_date: -1, createdAt: -1 }).lean();
+      return res.json({ success: true, data: configs });
+    }
+
     let config = null;
     if (date) {
       const d = new Date(date);
@@ -78,6 +83,11 @@ export const createProductionConfig = async (req, res) => {
       target_amount,
       off_amount,
       bonus_rate,
+      auto_bonus_mode,
+      auto_bonus_threshold,
+      auto_bonus_qty,
+      auto_bonus_enabled,
+      auto_bonus_rules,
       allowance,
       stitch_cap,
       effective_date,
@@ -101,6 +111,11 @@ export const createProductionConfig = async (req, res) => {
       target_amount,
       off_amount,
       bonus_rate,
+      auto_bonus_mode,
+      auto_bonus_threshold,
+      auto_bonus_qty,
+      auto_bonus_enabled,
+      auto_bonus_rules,
       allowance,
       stitch_cap,
       effective_date,
@@ -135,6 +150,11 @@ export const updateProductionConfig = async (req, res) => {
       target_amount,
       off_amount,
       bonus_rate,
+      auto_bonus_mode,
+      auto_bonus_threshold,
+      auto_bonus_qty,
+      auto_bonus_enabled,
+      auto_bonus_rules,
       allowance,
       stitch_cap,
       effective_date,
@@ -145,7 +165,12 @@ export const updateProductionConfig = async (req, res) => {
       return res.status(400).json({ message: "Valid businessId is required" });
     }
 
-    const existing = await ProductionConfig.findOne(businessFilter).sort({ createdAt: -1 });
+    const requestedId = req.params?.id || req.body?._id || req.body?.id;
+    const existing = requestedId && mongoose.Types.ObjectId.isValid(requestedId)
+      ? await ProductionConfig.findOne({ _id: requestedId, ...businessFilter })
+      : await ProductionConfig.findOne(businessFilter).sort({ createdAt: -1 });
+
+    if (requestedId && !existing) return res.status(404).json({ message: "Production config not found" });
 
     if (existing) {
       if (payout_mode !== undefined) existing.payout_mode = payout_mode;
@@ -160,6 +185,11 @@ export const updateProductionConfig = async (req, res) => {
       if (target_amount !== undefined) existing.target_amount = target_amount;
       if (off_amount !== undefined) existing.off_amount = off_amount;
       if (bonus_rate !== undefined) existing.bonus_rate = bonus_rate;
+      if (auto_bonus_mode !== undefined) existing.auto_bonus_mode = auto_bonus_mode;
+      if (auto_bonus_threshold !== undefined) existing.auto_bonus_threshold = auto_bonus_threshold;
+      if (auto_bonus_qty !== undefined) existing.auto_bonus_qty = auto_bonus_qty;
+      if (auto_bonus_enabled !== undefined) existing.auto_bonus_enabled = auto_bonus_enabled;
+      if (auto_bonus_rules !== undefined) existing.auto_bonus_rules = auto_bonus_rules;
       if (allowance !== undefined) existing.allowance = allowance;
       if (stitch_cap !== undefined) existing.stitch_cap = stitch_cap;
       if (effective_date !== undefined) existing.effective_date = effective_date ? new Date(effective_date) : null;
@@ -181,6 +211,11 @@ export const updateProductionConfig = async (req, res) => {
       target_amount,
       off_amount,
       bonus_rate,
+      auto_bonus_mode,
+      auto_bonus_threshold,
+      auto_bonus_qty,
+      auto_bonus_enabled,
+      auto_bonus_rules,
       allowance,
       stitch_cap,
       effective_date: effective_date ? new Date(effective_date) : null,

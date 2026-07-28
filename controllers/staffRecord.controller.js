@@ -8,6 +8,7 @@ import {
   calculateProductionRow,
   calculateProductionTotals,
   getTargetProgress,
+  calculateAutoBonusQty,
   isTargetMode,
   normalizeProductionConfig,
   shouldShowProductionAmount,
@@ -259,7 +260,10 @@ async function buildRecordPayload({
   const resolvedAttendanceRule = getAttendanceRule(ruleContext, resolvedAttendance);
   const canHaveBonus = Boolean(resolvedAttendanceRule?.allows_bonus);
   const effectiveBonusRate = bonus_rate_override ?? normalizedConfig.bonus_rate ?? 0;
-  const effectiveBonusQty  = canHaveBonus ? (bonus_qty || 0) : 0;
+  const configuredBonusQty = calculateAutoBonusQty(totals, normalizedConfig);
+  const effectiveBonusQty  = canHaveBonus
+    ? (bonus_qty == null ? configuredBonusQty : Number(bonus_qty) || 0)
+    : 0;
   const bonus_amount   = effectiveBonusQty * effectiveBonusRate;
 
   // Final amount
@@ -292,6 +296,11 @@ async function buildRecordPayload({
       target_amount:    normalizedConfig.target_amount,
       off_amount:       normalizedConfig.off_amount,
       bonus_rate:       normalizedConfig.bonus_rate,
+      auto_bonus_mode:  normalizedConfig.auto_bonus_mode,
+      auto_bonus_threshold: normalizedConfig.auto_bonus_threshold,
+      auto_bonus_qty:   normalizedConfig.auto_bonus_qty,
+      auto_bonus_enabled: normalizedConfig.auto_bonus_enabled,
+      auto_bonus_rules: normalizedConfig.auto_bonus_rules,
       allowance:        normalizedConfig.allowance,
       stitch_cap:       normalizedConfig.stitch_cap,
     },
@@ -307,7 +316,7 @@ export const createStaffRecord = async (req, res) => {
       date,
       attendance,
       production       = [],
-      bonus_qty        = 0,
+      bonus_qty,
       bonus_rate_override,   // if user manually sets per-bonus rate
       fix_amount,
       force_after_target_for_non_target = false,

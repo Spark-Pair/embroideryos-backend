@@ -10,5 +10,6 @@ const router = express.Router();
 router.get("/",  getProductionConfig);    // GET  /production-config
 router.post("/",  createProductionConfig);    // POST  /production-config
 router.put("/",  updateProductionConfig); // PUT  /production-config
+router.put("/:id", updateProductionConfig);
 
 export default router;
