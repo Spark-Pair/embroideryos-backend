@@ -4,7 +4,7 @@ import InvoiceCounter from "../models/InvoiceCounter.js";
 import Order from "../models/Order.js";
 import Customer from "../models/Customer.js";
 import CustomerPayment from "../models/CustomerPayment.js";
-import cloudinary from "../services/cloudinary.js";
+import cloudinary, { configureCloudinary } from "../services/cloudinary.js";
 
 const MAX_INVOICE_ORDERS = 7;
 
@@ -212,14 +212,21 @@ export const createInvoice = async (req, res) => {
       { new: true, upsert: true }
     );
     const invoiceNumber = `${invoiceYear}-${String(counter.seq).padStart(4, "0")}`;
+    
     let invoiceImageUrl = "";
 
     if (typeof image_data === "string" && image_data.startsWith("data:image/")) {
-      const uploaded = await cloudinary.uploader.upload(image_data, {
-        folder: "embroideryos/invoice-images",
-        resource_type: "image",
-      });
-      invoiceImageUrl = uploaded.secure_url || "";
+      try {
+        configureCloudinary();
+        const uploaded = await cloudinary.uploader.upload(image_data, {
+          folder: "embroideryos/invoice-images",
+          resource_type: "image",
+        });
+        invoiceImageUrl = uploaded.secure_url || "";
+      } catch (uploadErr) {
+        console.error("createInvoice: cloudinary upload failed:", uploadErr?.message || uploadErr);
+        return res.status(502).json({ message: "Failed to upload invoice image. Please try again." });
+      }
     } else if (typeof image_data === "string") {
       invoiceImageUrl = image_data;
     }
@@ -397,5 +404,119 @@ export const getInvoice = async (req, res) => {
   } catch (err) {
     console.error("getInvoice:", err);
     return res.status(500).json({ message: "Failed to fetch invoice" });
+  }
+};
+
+export const updateInvoice = async (req, res) => {
+  try {
+    const { order_ids, invoice_date, note, image_data } = req.body;
+    const scope = getBusinessFilter(req, req.query.businessId);
+
+    const invoice = await Invoice.findOne({ _id: req.params.id, ...scope });
+    if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+
+    if (!Array.isArray(order_ids) || order_ids.length === 0) {
+      return res.status(400).json({ message: "At least one order must be selected" });
+    }
+    if (!isValidInvoiceImagePayload(image_data)) {
+      return res.status(400).json({ message: "Invalid invoice image (max ~6MB)" });
+    }
+    const hasInvoiceImage = typeof image_data === "string" && image_data.trim().length > 0;
+    const canUploadInvoiceImage = Boolean(req.plan?.features?.invoice_image_upload);
+    if (hasInvoiceImage && image_data.startsWith("data:image/") && !canUploadInvoiceImage) {
+      return res.status(403).json({ message: "Premium plan required for invoice image upload" });
+    }
+
+    const uniqueOrderIds = [...new Set(order_ids.map(String))];
+    if (uniqueOrderIds.length > MAX_INVOICE_ORDERS) {
+      return res.status(400).json({ message: `Maximum ${MAX_INVOICE_ORDERS} orders allowed in one invoice` });
+    }
+    const areAllValidOrderIds = uniqueOrderIds.every((id) => mongoose.Types.ObjectId.isValid(id));
+    if (!areAllValidOrderIds) {
+      return res.status(400).json({ message: "One or more order IDs are invalid" });
+    }
+
+    const previousOrderIds = (invoice.order_ids || []).map(String);
+
+    // orders must belong to same customer, and be either free (invoice_id: null)
+    // or already belong to this invoice
+    const orders = await Order.find({
+      ...scope,
+      _id: { $in: uniqueOrderIds },
+      customer_id: invoice.customer_id,
+      $or: [{ invoice_id: null }, { invoice_id: invoice._id }],
+    }).lean();
+
+    if (orders.length !== uniqueOrderIds.length) {
+      return res.status(400).json({
+        message: "Some selected orders are missing, from another customer, or already invoiced",
+      });
+    }
+
+    const totalAmount = orders.reduce((sum, order) => sum + toNum(order.total_amount), 0);
+
+    const invoiceDateValue = invoice_date ? new Date(invoice_date) : invoice.invoice_date;
+    if (Number.isNaN(invoiceDateValue.getTime())) {
+      return res.status(400).json({ message: "Invalid invoice date" });
+    }
+    const invoiceDay = startOfDay(invoiceDateValue);
+    const todayDay = startOfDay(new Date());
+    if (invoiceDay > todayDay) {
+      return res.status(400).json({ message: "Invoice date cannot be after today" });
+    }
+
+    const latestOrderDate = orders.reduce((latest, order) => {
+      const d = order?.date ? startOfDay(order.date) : null;
+      if (!d) return latest;
+      if (!latest || d > latest) return d;
+      return latest;
+    }, null);
+    if (latestOrderDate && invoiceDay < latestOrderDate) {
+      return res.status(400).json({ message: `Invoice date cannot be before selected order date (${toDateInput(latestOrderDate)})` });
+    }
+
+    let invoiceImageUrl = invoice.image_data || "";
+    if (typeof image_data === "string" && image_data.startsWith("data:image/")) {
+      try {
+        configureCloudinary();
+        const uploaded = await cloudinary.uploader.upload(image_data, {
+          folder: "embroideryos/invoice-images",
+          resource_type: "image",
+        });
+        invoiceImageUrl = uploaded.secure_url || "";
+      } catch (uploadErr) {
+        console.error("updateInvoice: cloudinary upload failed:", uploadErr?.message || uploadErr);
+        return res.status(502).json({ message: "Failed to upload invoice image. Please try again." });
+      }
+    }
+
+    invoice.order_ids = uniqueOrderIds;
+    invoice.order_count = uniqueOrderIds.length;
+    invoice.total_amount = totalAmount;
+    invoice.invoice_date = invoiceDateValue;
+    invoice.image_data = invoiceImageUrl;
+    invoice.note = typeof note === "string" ? note.trim() : invoice.note;
+    await invoice.save();
+
+    const removedOrderIds = previousOrderIds.filter((id) => !uniqueOrderIds.includes(id));
+    const addedOrderIds = uniqueOrderIds.filter((id) => !previousOrderIds.includes(id));
+
+    if (removedOrderIds.length) {
+      await Order.updateMany(
+        { ...scope, _id: { $in: removedOrderIds } },
+        { $set: { invoice_id: null, invoiced_at: null } }
+      );
+    }
+    if (addedOrderIds.length) {
+      await Order.updateMany(
+        { ...scope, _id: { $in: addedOrderIds } },
+        { $set: { invoice_id: invoice._id, invoiced_at: invoice.invoice_date } }
+      );
+    }
+
+    return res.json({ success: true, data: invoice });
+  } catch (err) {
+    console.error("updateInvoice:", err);
+    return res.status(500).json({ message: "Failed to update invoice" });
   }
 };
