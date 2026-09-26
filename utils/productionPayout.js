@@ -12,6 +12,7 @@ export const AUTO_BONUS_MODES = {
   TARGET_MET: "target_met",
   PRODUCTION_AMOUNT: "production_amount",
 };
+export const AUTO_BONUS_CONDITIONS = { STITCH_TOTAL: "stitch_total" };
 
 const toNumber = (value, fallback = 0) => {
   const parsed = Number(value);
@@ -21,7 +22,7 @@ const toNumber = (value, fallback = 0) => {
 export const normalizeProductionConfig = (config = {}) => {
   const payoutMode = config?.payout_mode || DEFAULT_PAYOUT_MODE;
   const configuredRules = Array.isArray(config?.auto_bonus_rules)
-    ? config.auto_bonus_rules.filter((rule) => ["target_met", "production_amount", "target_multiple"].includes(rule?.condition)).map((rule) => ({
+    ? config.auto_bonus_rules.filter((rule) => ["target_met", "production_amount", "target_multiple", AUTO_BONUS_CONDITIONS.STITCH_TOTAL].includes(rule?.condition)).map((rule) => ({
         condition: rule.condition,
         threshold: toNumber(rule.threshold, 0),
         bonus_qty: toNumber(rule.bonus_qty, 0),
@@ -59,6 +60,7 @@ export const calculateAutoBonusQty = (totals, rawConfig = {}) => {
     const target = getTargetProgress(totals, config);
     const afterTargetAmount = toNumber(totals?.after_target_amt, 0);
     const onTargetAmount = toNumber(totals?.on_target_amt, 0);
+    const totalStitch = toNumber(totals?.total_stitch, 0);
     const targetAmount = config.target_amount;
     return config.auto_bonus_rules.reduce((best, rule) => {
       const matches = rule.condition === AUTO_BONUS_MODES.TARGET_MET
@@ -67,8 +69,12 @@ export const calculateAutoBonusQty = (totals, rawConfig = {}) => {
         ? rule.threshold > 0 && afterTargetAmount >= rule.threshold
         : rule.condition === "target_multiple"
         ? targetAmount > 0 && onTargetAmount >= targetAmount * rule.threshold
+        : rule.condition === AUTO_BONUS_CONDITIONS.STITCH_TOTAL
+        ? rule.threshold > 0 ? Math.floor(totalStitch / rule.threshold) * rule.bonus_qty : 0
         : false;
-      return matches ? Math.max(best, rule.bonus_qty) : best;
+      return rule.condition === AUTO_BONUS_CONDITIONS.STITCH_TOTAL
+        ? Math.max(best, matches)
+        : matches ? Math.max(best, rule.bonus_qty) : best;
     }, 0);
   }
   if (config.auto_bonus_qty <= 0) return 0;

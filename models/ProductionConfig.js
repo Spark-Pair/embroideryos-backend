@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import { DEFAULT_PAYOUT_MODE } from "../utils/productionPayout.js";
 
 const autoBonusRuleSchema = new mongoose.Schema({
-  condition: { type: String, enum: ["target_met", "production_amount", "target_multiple"], required: true },
+  condition: { type: String, enum: ["target_met", "production_amount", "target_multiple", "stitch_total"], required: true },
   threshold: { type: Number, default: 1, min: 0 },
   bonus_qty: { type: Number, required: true, min: 0 },
 }, { _id: false });
