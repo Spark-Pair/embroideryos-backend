@@ -8,12 +8,16 @@ import {
   deleteStaffRecord,
   getStaffRecordStats,
   getStaffRecordMonths,
+  previewStaffRecordRecalculation,
+  applyStaffRecordRecalculation,
 } from "../controllers/staffRecord.controller.js";
 
 const router = express.Router();
 
 router.get("/stats",               getStaffRecordStats);   // GET  /staff-records/stats
 router.get("/months",              getStaffRecordMonths);  // GET  /staff-records/months
+router.post("/recalculation-preview", previewStaffRecordRecalculation);
+router.post("/recalculation-apply", applyStaffRecordRecalculation);
 router.get("/last/:staff_id",      getStaffLastRecord);    // GET  /staff-records/last/:staff_id
 router.get("/",                    getStaffRecords);        // GET  /staff-records
 router.get("/:id",                 getStaffRecord);         // GET  /staff-records/:id

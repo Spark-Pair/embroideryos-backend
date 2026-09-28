@@ -61,6 +61,7 @@ const staffRecordSchema = new mongoose.Schema(
     // ── Production ──────────────────────────────────────────────────────────────
     production: { type: [productionRowSchema], default: [] },
     totals:     { type: productionTotalsSchema,  default: null },
+    applique_amount: { type: Number, default: 0 },
 
     // ── Config snapshot (locked at time of entry) ───────────────────────────────
     config_snapshot: {
